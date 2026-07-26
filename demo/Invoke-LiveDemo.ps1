@@ -500,7 +500,7 @@ function Initialize-Demo {
         Assert-LastExitCode 'create negative-control Flux configuration'
     }
     else {
-        az k8s-configuration flux update --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true sync_interval=30s retry_interval=15s timeout=20s -o none
+        az k8s-configuration flux update --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --kind git --url $OriginUrl --branch main --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true sync_interval=30s retry_interval=15s timeout=20s -o none
         Assert-LastExitCode 'update negative-control Flux configuration'
         Write-Host 'Negative-control Flux configuration already exists; parameters refreshed.' -ForegroundColor DarkGray
     }
