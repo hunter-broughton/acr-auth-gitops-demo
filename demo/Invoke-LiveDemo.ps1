@@ -124,7 +124,8 @@ function Wait-FluxRevision {
         [string]$Context,
         [string]$FluxName,
         [string[]]$Kustomizations,
-        [string]$GitSha
+        [string]$GitSha,
+        [switch]$AcceptAttemptedRevision
     )
     $targetRevision = "main@sha1:$GitSha"
     Wait-Until -TimeoutSeconds $FluxTimeoutSeconds -Description "$FluxName source revision $targetRevision on $Context" -Condition {
@@ -134,8 +135,11 @@ function Wait-FluxRevision {
     foreach ($name in $Kustomizations) {
         $resourceName = Get-FluxResourceName -FluxName $FluxName -KustomizationName $name
         Wait-Until -TimeoutSeconds $FluxTimeoutSeconds -Description "$resourceName revision $targetRevision on $Context" -Condition {
-            $revision = kubectl --context $Context -n flux-system get "kustomization/$resourceName" -o jsonpath='{.status.lastAppliedRevision}' 2>$null
-            return $revision -eq $targetRevision
+            $resource = kubectl --context $Context -n flux-system get "kustomization/$resourceName" -o json 2>$null | ConvertFrom-Json
+            if ($AcceptAttemptedRevision) {
+                return $resource.status.lastAttemptedRevision -eq $targetRevision -or $resource.status.lastAppliedRevision -eq $targetRevision
+            }
+            return $resource.status.lastAppliedRevision -eq $targetRevision
         }
     }
 }
@@ -150,7 +154,7 @@ function Sync-AllFlux {
     foreach ($cluster in $Clusters) {
         Wait-FluxRevision -Context $cluster.Context -FluxName $MainFluxName -Kustomizations @('namespaces', 'workloads') -GitSha $GitSha
     }
-    Wait-FluxRevision -Context $Clusters[0].Context -FluxName $NegativeFluxName -Kustomizations @('negative-control') -GitSha $GitSha
+    Wait-FluxRevision -Context $Clusters[0].Context -FluxName $NegativeFluxName -Kustomizations @('negative-control') -GitSha $GitSha -AcceptAttemptedRevision
 }
 
 function Copy-Stage {
@@ -334,7 +338,7 @@ function Show-PositiveProof {
 
 function Show-AuthLogs {
     param([datetime]$Since, [string]$Pattern)
-    $sinceTime = $Since.ToUniversalTime().ToString('o')
+    $sinceTime = $Since.ToUniversalTime().AddSeconds(-30).ToString('o')
     foreach ($cluster in $Clusters) {
         $pods = kubectl --context $cluster.Context -n azure-arc-acr-auth get pods -l app.kubernetes.io/component=auth-injector -o jsonpath='{.items[*].metadata.name}'
         foreach ($pod in ($pods -split ' ')) {
@@ -348,9 +352,10 @@ function Show-AuthLogs {
 function Get-MetricSample {
     param([string]$MetricPattern)
     $samples = @()
-    for ($attempt = 0; $attempt -lt 8; $attempt++) {
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
         $raw = kubectl --context $Clusters[0].Context get --raw '/api/v1/namespaces/azure-arc-acr-auth/services/http:acr-auth-acr-auth-extension-authinjector:metrics/proxy/metrics' 2>$null
         $samples += @($raw -split "`n" | Where-Object { $_ -match $MetricPattern })
+        Start-Sleep -Milliseconds 150
     }
     return @($samples | Sort-Object -Unique)
 }
@@ -377,9 +382,9 @@ function Invoke-Positive {
     Write-Host "`nAuthInjector evidence:" -ForegroundColor Yellow
     Show-AuthLogs -Since $started -Pattern 'injected azure-arc-acr-pull'
     Write-Host "`nWebhook metric samples:" -ForegroundColor Yellow
-    Get-MetricSample -MetricPattern '^acr_auth_webhook_admission_total\{reason="inject"\}'
+    Get-MetricSample -MetricPattern '^acr_auth_webhook_admission_total\{reason="inject"\}' | ForEach-Object { Write-Host $_ }
     Write-Host "`nSecretProvisioner metrics:" -ForegroundColor Yellow
-    Get-ProvisionerMetrics
+    Get-ProvisionerMetrics | ForEach-Object { Write-Host $_ }
 }
 
 function Wait-NegativePod {
@@ -452,7 +457,7 @@ function Invoke-Negative {
     Write-Host 'AuthInjector decision:' -ForegroundColor Yellow
     Show-AuthLogs -Since $started -Pattern "namespace-not-mapped|$NegativeNamespace"
     Write-Host 'Webhook metric samples:' -ForegroundColor Yellow
-    Get-MetricSample -MetricPattern '^acr_auth_webhook_admission_total\{reason="namespace-not-mapped"\}'
+    Get-MetricSample -MetricPattern '^acr_auth_webhook_admission_total\{reason="namespace-not-mapped"\}' | ForEach-Object { Write-Host $_ }
     Write-Host 'Monitoring snapshot:' -ForegroundColor Yellow
     Show-MonitoringQuery -Since $started
 }
@@ -491,11 +496,13 @@ function Initialize-Demo {
     Write-Section 'Initialize isolated negative-control Flux application'
     $existing = az k8s-configuration flux list --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters -o json | ConvertFrom-Json | Where-Object { $_.name -eq $NegativeFluxName }
     if (-not $existing) {
-        az k8s-configuration flux create --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --scope cluster --namespace flux-system --kind git --url $OriginUrl --branch main --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true disable_health_check=true sync_interval=30s retry_interval=15s timeout=2m -o table
+        az k8s-configuration flux create --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --scope cluster --namespace flux-system --kind git --url $OriginUrl --branch main --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true sync_interval=30s retry_interval=15s timeout=20s -o table
         Assert-LastExitCode 'create negative-control Flux configuration'
     }
     else {
-        Write-Host 'Negative-control Flux configuration already exists.' -ForegroundColor DarkGray
+        az k8s-configuration flux update --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true sync_interval=30s retry_interval=15s timeout=20s -o none
+        Assert-LastExitCode 'update negative-control Flux configuration'
+        Write-Host 'Negative-control Flux configuration already exists; parameters refreshed.' -ForegroundColor DarkGray
     }
     Invoke-Preflight
 }

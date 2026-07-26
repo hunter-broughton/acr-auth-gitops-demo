@@ -20,8 +20,8 @@ Set-Location C:\Users\t-hbroughton\Documents\Milestone-2\acr-auth-gitops-demo
 ```
 
 This creates a separate Azure-managed Microsoft Flux configuration named
-`acr-auth-negative-control`. Its Kustomization disables workload health waiting so the Git apply can
-remain compliant while monitoring independently shows the Pod pull failure.
+`acr-auth-negative-control`. It uses a 20-second health timeout, so the intentionally unhealthy
+application turns clearly non-compliant without affecting the positive applications.
 
 ## Before the meeting
 
@@ -109,8 +109,8 @@ only namespace eligibility.
 Refresh the frontend and compare:
 
 - `acr-auth-gitops-demo-workloads`: compliant GitOps, healthy workloads, authenticated pulls.
-- `acr-auth-negative-control-negative-control`: Git-applied workload, unhealthy Pod with
-  `ImagePullBackOff`, no injected Secret.
+- `acr-auth-negative-control-negative-control`: intentionally non-compliant Kustomization, unhealthy
+  Pod with `ImagePullBackOff`, no injected Secret.
 
 Close with: the same desired-state pipeline produced both results; the namespace-to-ACR contract is
 the only difference, and the monitoring extension explains that difference without exposing a
@@ -148,7 +148,8 @@ configurations, namespaces, or the generated positive pull Secrets.
   cached layers do not remove the registry resolution step.
 - **Known-good image for the negative control:** failure demonstrates missing authentication, not a
   typo or missing artifact.
-- **Separate negative Flux application:** positive applications remain green and easy to compare.
+- **Separate negative Flux application:** positive applications remain green while the control turns
+  red within its 20-second health timeout.
 - **Kubernetes state is the immediate proof:** Log Analytics and the frontend are supporting views,
   so ingestion latency cannot derail the live sequence.
 
