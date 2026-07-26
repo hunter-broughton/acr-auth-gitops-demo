@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - phase.yaml
   - workloads.yaml
+  - fleet-workloads.yaml
