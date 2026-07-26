@@ -549,8 +549,10 @@ ResourceSyncNotifications_CL
   by OwnerName, Category
 | order by OwnerName asc, Category asc
 "@
+    $queryPath = Join-Path $env:TEMP "acr-auth-demo-monitoring-$PID-$([guid]::NewGuid().ToString('N')).kql"
     try {
-        $rows = az monitor log-analytics query --subscription $Subscription --workspace $WorkspaceId --analytics-query $query --timespan P1D -o json | ConvertFrom-Json
+        Set-Content -Path $queryPath -Value $query -Encoding utf8
+        $rows = az monitor log-analytics query --subscription $Subscription --workspace $WorkspaceId --analytics-query "@$queryPath" --timespan P1D -o json | ConvertFrom-Json
         if ($rows.Count -gt 0) {
             $rows | Select-Object OwnerName, Category, Objects, Rows, Kinds, PodPhases, WaitingReasons, Latest | Format-Table -AutoSize -Wrap
         }
@@ -560,6 +562,9 @@ ResourceSyncNotifications_CL
     }
     catch {
         Write-Host "Monitoring query is not presentation-blocking: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+    finally {
+        Remove-Item $queryPath -Force -ErrorAction SilentlyContinue
     }
 }
 
