@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitops-unmapped-control
+  labels:
+    demo.microsoft.com/scenario: private-acr-negative-control
+    demo.microsoft.com/cluster: hbroughton-acr-test-kind

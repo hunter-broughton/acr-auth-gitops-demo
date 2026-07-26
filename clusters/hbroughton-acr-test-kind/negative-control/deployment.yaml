@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unmapped-model-trainer
+  namespace: gitops-unmapped-control
+  labels:
+    app.kubernetes.io/name: unmapped-model-trainer
+    demo.microsoft.com/scenario: private-acr-negative-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: unmapped-model-trainer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: unmapped-model-trainer
+        demo.microsoft.com/scenario: private-acr-negative-control
+    spec:
+      containers:
+        - name: trainer
+          image: acrvisiontrainkgw7x.azurecr.io/model-trainer:v1
+          imagePullPolicy: Always

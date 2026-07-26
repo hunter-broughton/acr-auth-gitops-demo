@@ -59,3 +59,14 @@ Microsoft-managed labels and records `FluxConfigured=true` with configuration na
 
 The deployed Pods should be Ready and should show `azure-arc-acr-pull` in
 `spec.imagePullSecrets`, while the corresponding Deployment templates remain empty.
+
+## Five-minute live demo
+
+The repeatable presenter automation and talk track are in:
+
+- [`demo/Invoke-LiveDemo.ps1`](demo/Invoke-LiveDemo.ps1)
+- [`demo/FIVE-MINUTE-RUNBOOK.md`](demo/FIVE-MINUTE-RUNBOOK.md)
+
+Run `Initialize` once, `Prepare` before the meeting, `Run` on stage, and `Cleanup` afterward. The
+positive phase fans one Git commit across both clusters. The negative phase uses the same private
+image in an intentionally unmapped namespace and waits for `ImagePullBackOff`.
