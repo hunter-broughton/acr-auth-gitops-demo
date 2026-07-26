@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitops-vision-a
+  labels:
+    demo.microsoft.com/scenario: private-acr
+    demo.microsoft.com/cluster: hbroughton-acr-test-kind
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitops-speech-a
+  labels:
+    demo.microsoft.com/scenario: private-acr
+    demo.microsoft.com/cluster: hbroughton-acr-test-kind

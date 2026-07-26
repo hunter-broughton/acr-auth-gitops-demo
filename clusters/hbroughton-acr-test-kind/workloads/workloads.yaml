@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vision-model-trainer
+  namespace: gitops-vision-a
+  labels:
+    app.kubernetes.io/name: vision-model-trainer
+    demo.microsoft.com/scenario: private-acr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vision-model-trainer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vision-model-trainer
+        demo.microsoft.com/scenario: private-acr
+    spec:
+      containers:
+        - name: trainer
+          image: acrvisiontrainkgw7x.azurecr.io/model-trainer:v1
+          imagePullPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: speech-model-trainer
+  namespace: gitops-speech-a
+  labels:
+    app.kubernetes.io/name: speech-model-trainer
+    demo.microsoft.com/scenario: private-acr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: speech-model-trainer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: speech-model-trainer
+        demo.microsoft.com/scenario: private-acr
+    spec:
+      containers:
+        - name: trainer
+          image: acrspeechtrainkgw7x.azurecr.io/model-trainer:v1
+          imagePullPolicy: Always

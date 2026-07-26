@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-acr-workload-phase
+  namespace: gitops-nlp-b
+  labels:
+    demo.microsoft.com/scenario: private-acr
+data:
+  state: waiting-for-workload-commit
