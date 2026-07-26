@@ -264,6 +264,14 @@ function Wait-DeploymentAbsent {
     }
 }
 
+function Wait-PodsAbsent {
+    param([string]$Context, [string]$Namespace, [string]$Deployment)
+    Wait-Until -TimeoutSeconds $WorkloadTimeoutSeconds -Description "$Namespace/$Deployment Pod removal" -Condition {
+        $pods = kubectl --context $Context -n $Namespace get pod -l "app.kubernetes.io/name=$Deployment" -o name 2>$null
+        return [string]::IsNullOrWhiteSpace($pods)
+    }
+}
+
 function Wait-SecretReady {
     param([string]$Context, [string]$Namespace)
     Wait-Until -TimeoutSeconds $WorkloadTimeoutSeconds -Description "$Namespace/azure-arc-acr-pull" -Condition {
@@ -284,11 +292,13 @@ function Invoke-Prepare {
     foreach ($cluster in $Clusters) {
         foreach ($workload in $cluster.Workloads) {
             Wait-DeploymentAbsent -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
+            Wait-PodsAbsent -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
             Wait-SecretReady -Context $cluster.Context -Namespace $workload.Namespace
             kubectl --context $cluster.Context -n $workload.Namespace delete events --all --ignore-not-found | Out-Null
         }
     }
     Wait-DeploymentAbsent -Context $Clusters[0].Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
+    Wait-PodsAbsent -Context $Clusters[0].Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
     kubectl --context $Clusters[0].Context -n $NegativeNamespace delete events --all --ignore-not-found | Out-Null
 
     Write-Host "Prepared at Git commit $($sha.Substring(0, 7)). Positive namespaces and extension-owned Secrets are warm; no demo Deployments exist." -ForegroundColor Green

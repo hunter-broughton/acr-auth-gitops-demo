@@ -32,9 +32,12 @@ Run this 10-15 minutes before presenting:
 ```
 
 `Prepare` is idempotent. It commits a reset only if needed, reconciles exact Git SHAs, removes prior
-demo Deployments through Flux pruning, preserves the four namespaces, waits for four unexpired
+demo Deployments and Pods through Flux pruning, preserves the four namespaces, waits for four unexpired
 extension-owned pull Secrets, clears demo namespace Events, and verifies that the negative namespace
 is not in either `acrMap`.
+
+The complete noninteractive rehearsal was measured at **167.2 seconds**, leaving roughly two minutes
+inside a five-minute slot for narration, GitHub, and frontend refreshes.
 
 Open these before sharing the screen:
 
