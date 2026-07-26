@@ -12,6 +12,10 @@ Canonical source: <https://github.com/hunter-broughton/acr-auth-gitops-demo>
 | `acr-auth-demo` | `gitops-nlp-b` | `acrnlptrainkgw7x.azurecr.io` | `nlp-model-trainer` |
 | `acr-auth-demo` | `gitops-vision-b` | `acrvisiontrainkgw7x.azurecr.io` | `vision-model-trainer` |
 
+The optional fleet profile adds batch and canary variants in each mapped namespace. It expands the
+same topology from four to twelve Deployments without adding credentials, registries, namespace
+mappings, or Azure resources.
+
 The namespace kustomizations reconcile first. Workload kustomizations depend on them, allowing the
 ACR Auth SecretProvisioner to create `azure-arc-acr-pull` before the Deployments are enabled in the
 second demo commit.
@@ -70,3 +74,17 @@ The repeatable presenter automation and talk track are in:
 Run `Initialize` once, `Prepare` before the meeting, `Run` on stage, and `Cleanup` afterward. The
 positive phase fans one Git commit across both clusters. The negative phase uses the same private
 image in an intentionally unmapped namespace and waits for `ImagePullBackOff`.
+
+For a longer scale-focused presentation, use `RunFleet`. It deploys the core four workloads, expands
+to twelve, then retains all twelve healthy workloads while the isolated negative control fails:
+
+```powershell
+.\demo\Invoke-LiveDemo.ps1 -Action Prepare
+.\demo\Invoke-LiveDemo.ps1 -Action RunFleet
+.\demo\Invoke-LiveDemo.ps1 -Action Cleanup
+```
+
+Cluster and workload inventory lives in [`demo/topology.json`](demo/topology.json). The controller
+iterates that file, so adding a future cluster does not require PowerShell changes. Cluster creation,
+Arc connection, registered extension installation, ACR role assignment, and monitoring installation
+remain explicit offstage prerequisites; the demo controller never provisions Azure resources.

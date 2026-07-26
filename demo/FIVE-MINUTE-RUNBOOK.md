@@ -126,6 +126,51 @@ Close with: the same desired-state pipeline produced both results; the namespace
 the only difference, and the monitoring extension explains that difference without exposing a
 credential.
 
+## Extended fleet showcase
+
+Use this for a seven-to-ten-minute scale narrative, not the five-minute slot:
+
+```powershell
+.\demo\Invoke-LiveDemo.ps1 -Action Prepare
+.\demo\Invoke-LiveDemo.ps1 -Action RunFleet
+```
+
+`RunFleet` preserves the core positive phase, then pauses before a second Git commit expands four
+Deployments to twelve. The four pre-warmed namespace Secrets serve all twelve workloads, so the
+journey board can compare one Git SHA, Flux application, Secret reuse, admission injection, private
+pull confirmation, and runtime readiness per cluster. A final `fleet-negative` stage keeps the
+twelve mapped workloads healthy while adding the same isolated unmapped control.
+
+The script emits six numbered steps for every phase:
+
+1. Git desired state
+2. Microsoft Flux reconciliation
+3. SecretProvisioner readiness
+4. AuthInjector admission
+5. Kubelet and private ACR result
+6. GitOps monitoring refresh
+
+You can run only the expansion after a positive phase with:
+
+```powershell
+.\demo\Invoke-LiveDemo.ps1 -Action Scale
+```
+
+Do not use `Scale` for the timed five-minute path. Use `Run`, which remains the rehearsed four-workload
+sequence.
+
+### Adding another registered cluster
+
+1. Connect and validate the cluster offstage; install Microsoft Flux, ACR Auth, and GitOps monitoring.
+2. Add its namespace/workload Kustomizations under `clusters/<cluster-name>`.
+3. Add one workload stage file to every directory under `demo/stages`.
+4. Add the cluster, context, resource group, ARM ID, stage filename, and workload inventory to
+  `demo/topology.json`.
+5. Run `Preflight`, `Prepare`, and `RunFleet -NonInteractive` before presenting.
+
+This deliberately does not automate Azure resource creation. A failed or partially onboarded cluster
+cannot silently enter the live topology.
+
 ## After the meeting
 
 ```powershell

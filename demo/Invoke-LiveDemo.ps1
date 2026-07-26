@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Initialize', 'Preflight', 'LivePreflight', 'Prepare', 'Run', 'Positive', 'Negative', 'Status', 'Cleanup')]
+    [ValidateSet('Initialize', 'Preflight', 'LivePreflight', 'Prepare', 'Run', 'RunFleet', 'Positive', 'Scale', 'Negative', 'Status', 'Cleanup')]
     [string]$Action = 'Status',
     [switch]$NonInteractive,
     [string]$Subscription = 'ClusterConfig-SubLib-002',
@@ -19,40 +19,32 @@ $NegativeFluxName = 'acr-auth-negative-control'
 $NegativeNamespace = 'gitops-unmapped-control'
 $NegativeDeployment = 'unmapped-model-trainer'
 $NegativeOwnerName = 'acr-auth-negative-control-negative-control'
-$ClusterArmIdA = '/subscriptions/0e750457-5252-493e-95a3-e40e6a460bf0/resourceGroups/hbroughton-acr-auth-test/providers/Microsoft.Kubernetes/connectedClusters/hbroughton-acr-test-kind'
-
-$Clusters = @(
-    [pscustomobject]@{
-        Name = 'hbroughton-acr-test-kind'
-        ResourceGroup = 'hbroughton-acr-auth-test'
-        Context = 'kind-hbroughton-acr-test-kind'
-        RepoPath = 'hbroughton-acr-test-kind'
-        Workloads = @(
-            [pscustomobject]@{ Namespace = 'gitops-vision-a'; Deployment = 'vision-model-trainer'; Registry = 'acrvisiontrainkgw7x.azurecr.io' },
-            [pscustomobject]@{ Namespace = 'gitops-speech-a'; Deployment = 'speech-model-trainer'; Registry = 'acrspeechtrainkgw7x.azurecr.io' }
-        )
-    },
-    [pscustomobject]@{
-        Name = 'acr-auth-demo'
-        ResourceGroup = 'acr-auth-demo'
-        Context = 'kind-acr-auth-demo'
-        RepoPath = 'acr-auth-demo'
-        Workloads = @(
-            [pscustomobject]@{ Namespace = 'gitops-nlp-b'; Deployment = 'nlp-model-trainer'; Registry = 'acrnlptrainkgw7x.azurecr.io' },
-            [pscustomobject]@{ Namespace = 'gitops-vision-b'; Deployment = 'vision-model-trainer'; Registry = 'acrvisiontrainkgw7x.azurecr.io' }
-        )
-    }
-)
-
-$LiveFiles = @(
-    'clusters/hbroughton-acr-test-kind/workloads/kustomization.yaml',
-    'clusters/acr-auth-demo/workloads/kustomization.yaml',
-    'clusters/hbroughton-acr-test-kind/negative-control/kustomization.yaml'
-)
+$Topology = Get-Content (Join-Path $PSScriptRoot 'topology.json') -Raw | ConvertFrom-Json
+$Clusters = @($Topology.clusters)
+$NegativeCluster = @($Clusters | Where-Object { $_.NegativeControl }) | Select-Object -First 1
+if ($Clusters.Count -eq 0 -or -not $NegativeCluster) {
+    throw 'demo/topology.json must define at least one cluster and one NegativeControl cluster.'
+}
+$ClusterArmIdA = $NegativeCluster.ClusterResourceId
+$LiveFiles = @($Clusters | ForEach-Object { "clusters/$($_.RepoPath)/workloads/kustomization.yaml" })
+$LiveFiles += "clusters/$($NegativeCluster.RepoPath)/negative-control/kustomization.yaml"
 
 function Write-Section {
     param([string]$Title)
     Write-Host "`n=== $Title ===" -ForegroundColor Cyan
+}
+
+function Write-DemoStep {
+    param([int]$Number, [string]$Name, [string]$Detail)
+    Write-Host ("[{0}/6] {1,-18} {2}" -f $Number, $Name, $Detail) -ForegroundColor Yellow
+}
+
+function Get-ClusterWorkloads {
+    param($Cluster, [switch]$IncludeFleet)
+    @($Cluster.Workloads)
+    if ($IncludeFleet) {
+        @($Cluster.FleetWorkloads)
+    }
 }
 
 function Assert-LastExitCode {
@@ -149,26 +141,27 @@ function Sync-AllFlux {
     foreach ($cluster in $Clusters) {
         Request-FluxReconcile -Context $cluster.Context -FluxName $MainFluxName
     }
-    Request-FluxReconcile -Context $Clusters[0].Context -FluxName $NegativeFluxName
+    Request-FluxReconcile -Context $NegativeCluster.Context -FluxName $NegativeFluxName
 
     foreach ($cluster in $Clusters) {
         Wait-FluxRevision -Context $cluster.Context -FluxName $MainFluxName -Kustomizations @('namespaces', 'workloads') -GitSha $GitSha
     }
-    Wait-FluxRevision -Context $Clusters[0].Context -FluxName $NegativeFluxName -Kustomizations @('negative-control') -GitSha $GitSha -AcceptAttemptedRevision
+    Wait-FluxRevision -Context $NegativeCluster.Context -FluxName $NegativeFluxName -Kustomizations @('negative-control') -GitSha $GitSha -AcceptAttemptedRevision
 }
 
 function Copy-Stage {
-    param([ValidateSet('baseline', 'positive', 'negative')][string]$Stage)
+    param([ValidateSet('baseline', 'positive', 'negative', 'fleet', 'fleet-negative')][string]$Stage)
     $stageDirectory = Join-Path $StageRoot $Stage
-    Copy-Item (Join-Path $stageDirectory 'cluster-a-workloads.yaml') (Join-Path $RepoRoot $LiveFiles[0]) -Force
-    Copy-Item (Join-Path $stageDirectory 'cluster-b-workloads.yaml') (Join-Path $RepoRoot $LiveFiles[1]) -Force
-    Copy-Item (Join-Path $stageDirectory 'negative-control.yaml') (Join-Path $RepoRoot $LiveFiles[2]) -Force
+    foreach ($cluster in $Clusters) {
+        $destination = "clusters/$($cluster.RepoPath)/workloads/kustomization.yaml"
+        Copy-Item (Join-Path $stageDirectory $cluster.StageFile) (Join-Path $RepoRoot $destination) -Force
+    }
+    $negativeDestination = "clusters/$($NegativeCluster.RepoPath)/negative-control/kustomization.yaml"
+    Copy-Item (Join-Path $stageDirectory 'negative-control.yaml') (Join-Path $RepoRoot $negativeDestination) -Force
 
-    foreach ($path in @(
-        'clusters/hbroughton-acr-test-kind/workloads',
-        'clusters/acr-auth-demo/workloads',
-        'clusters/hbroughton-acr-test-kind/negative-control'
-    )) {
+    $renderPaths = @($Clusters | ForEach-Object { "clusters/$($_.RepoPath)/workloads" })
+    $renderPaths += "clusters/$($NegativeCluster.RepoPath)/negative-control"
+    foreach ($path in $renderPaths) {
         kubectl kustomize (Join-Path $RepoRoot $path) | Out-Null
         Assert-LastExitCode "render $path"
     }
@@ -176,7 +169,7 @@ function Copy-Stage {
 
 function Publish-Stage {
     param(
-        [ValidateSet('baseline', 'positive', 'negative')][string]$Stage,
+        [ValidateSet('baseline', 'positive', 'negative', 'fleet', 'fleet-negative')][string]$Stage,
         [string]$Message
     )
     Push-Location $RepoRoot
@@ -252,11 +245,11 @@ function Invoke-LivePreflight {
         }
     }
 
-    $negativeSource = kubectl --context $Clusters[0].Context -n flux-system get "gitrepository/$NegativeFluxName" -o jsonpath='{.spec.url}' 2>$null
+    $negativeSource = kubectl --context $NegativeCluster.Context -n flux-system get "gitrepository/$NegativeFluxName" -o jsonpath='{.spec.url}' 2>$null
     if ($negativeSource -ne $OriginUrl) {
         throw 'The negative-control Flux source is not initialized from GitHub.'
     }
-    if (kubectl --context $Clusters[0].Context -n $NegativeNamespace get secret azure-arc-acr-pull --ignore-not-found -o name) {
+    if (kubectl --context $NegativeCluster.Context -n $NegativeNamespace get secret azure-arc-acr-pull --ignore-not-found -o name) {
         throw "$NegativeNamespace unexpectedly contains azure-arc-acr-pull."
     }
 
@@ -287,7 +280,7 @@ function Invoke-Preflight {
         }
     }
 
-    $negativeFlux = az k8s-configuration flux show --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName -o json | ConvertFrom-Json
+    $negativeFlux = az k8s-configuration flux show --subscription $Subscription --resource-group $NegativeCluster.ResourceGroup --cluster-name $NegativeCluster.Name --cluster-type connectedClusters --name $NegativeFluxName -o json | ConvertFrom-Json
     if ($negativeFlux.provisioningState -ne 'Succeeded' -or $negativeFlux.gitRepository.url -ne $OriginUrl) {
         throw 'The negative-control Microsoft Flux configuration is not initialized.'
     }
@@ -341,16 +334,16 @@ function Invoke-Prepare {
     $sha = Publish-Stage -Stage baseline -Message 'Demo reset: prewarm namespaces'
 
     foreach ($cluster in $Clusters) {
-        foreach ($workload in $cluster.Workloads) {
+        foreach ($workload in @(Get-ClusterWorkloads -Cluster $cluster -IncludeFleet)) {
             Wait-DeploymentAbsent -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
             Wait-PodsAbsent -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
             Wait-SecretReady -Context $cluster.Context -Namespace $workload.Namespace
             kubectl --context $cluster.Context -n $workload.Namespace delete events --all --ignore-not-found | Out-Null
         }
     }
-    Wait-DeploymentAbsent -Context $Clusters[0].Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
-    Wait-PodsAbsent -Context $Clusters[0].Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
-    kubectl --context $Clusters[0].Context -n $NegativeNamespace delete events --all --ignore-not-found | Out-Null
+    Wait-DeploymentAbsent -Context $NegativeCluster.Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
+    Wait-PodsAbsent -Context $NegativeCluster.Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
+    kubectl --context $NegativeCluster.Context -n $NegativeNamespace delete events --all --ignore-not-found | Out-Null
 
     Write-Host "Prepared at Git commit $($sha.Substring(0, 7)). Positive namespaces and extension-owned Secrets are warm; no demo Deployments exist." -ForegroundColor Green
 }
@@ -371,9 +364,10 @@ function Get-PodName {
 }
 
 function Show-PositiveProof {
+    param([switch]$IncludeFleet)
     $rows = @()
     foreach ($cluster in $Clusters) {
-        foreach ($workload in $cluster.Workloads) {
+        foreach ($workload in @(Get-ClusterWorkloads -Cluster $cluster -IncludeFleet:$IncludeFleet)) {
             $pod = Get-PodName -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
             $deploymentSecret = kubectl --context $cluster.Context -n $workload.Namespace get deployment $workload.Deployment -o jsonpath='{.spec.template.spec.imagePullSecrets[*].name}'
             $podSecret = kubectl --context $cluster.Context -n $workload.Namespace get pod $pod -o jsonpath='{.spec.imagePullSecrets[*].name}'
@@ -397,6 +391,40 @@ function Show-PositiveProof {
     $rows | Format-Table Cluster, Namespace, Deployment, GitSecret, PodSecret, Ready, Pulled, SecretExpiry, Image -AutoSize -Wrap
 }
 
+function Show-JourneyBoard {
+    param([string]$GitSha, [switch]$IncludeFleet)
+    $rows = @()
+    foreach ($cluster in $Clusters) {
+        $workloads = @(Get-ClusterWorkloads -Cluster $cluster -IncludeFleet:$IncludeFleet)
+        $injected, $pulled, $ready = 0, 0, 0
+        foreach ($workload in $workloads) {
+            $pod = Get-PodName -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
+            if (kubectl --context $cluster.Context -n $workload.Namespace get pod $pod -o jsonpath='{.spec.imagePullSecrets[*].name}' | Select-String -SimpleMatch 'azure-arc-acr-pull') {
+                $injected++
+            }
+            if ((kubectl --context $cluster.Context -n $workload.Namespace get pod $pod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}') -eq 'True') {
+                $ready++
+            }
+            $pullEvents = @(kubectl --context $cluster.Context -n $workload.Namespace get events --field-selector "involvedObject.name=$pod,reason=Pulled" -o name 2>$null)
+            if ($pullEvents.Count -gt 0) {
+                $pulled++
+            }
+        }
+        $rows += [pscustomobject]@{
+            Cluster = $cluster.Name
+            Git = $GitSha.Substring(0, 7)
+            Flux = 'Applied'
+            AcrSecrets = "$(@($workloads.Namespace | Sort-Object -Unique).Count) warm"
+            Admission = "$injected/$($workloads.Count) injected"
+            PrivatePull = "$pulled/$($workloads.Count) confirmed"
+            Runtime = "$ready/$($workloads.Count) ready"
+        }
+    }
+    Write-Host "`nCluster journey board:" -ForegroundColor Yellow
+    $rows | Format-Table -AutoSize
+    Write-Host 'Next: refresh the cluster view for reconciliation, inventory, runtime, and collector activity.' -ForegroundColor DarkCyan
+}
+
 function Show-AuthLogs {
     param([datetime]$Since, [string]$Pattern)
     $sinceTime = $Since.ToUniversalTime().AddSeconds(-30).ToString('o')
@@ -414,7 +442,7 @@ function Get-MetricSample {
     param([string]$MetricPattern)
     $samples = @()
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
-        $raw = kubectl --context $Clusters[0].Context get --raw '/api/v1/namespaces/azure-arc-acr-auth/services/http:acr-auth-acr-auth-extension-authinjector:metrics/proxy/metrics' 2>$null
+        $raw = kubectl --context $NegativeCluster.Context get --raw '/api/v1/namespaces/azure-arc-acr-auth/services/http:acr-auth-acr-auth-extension-authinjector:metrics/proxy/metrics' 2>$null
         $samples += @($raw -split "`n" | Where-Object { $_ -match $MetricPattern })
         Start-Sleep -Milliseconds 150
     }
@@ -422,7 +450,7 @@ function Get-MetricSample {
 }
 
 function Get-ProvisionerMetrics {
-    $raw = kubectl --context $Clusters[0].Context get --raw '/api/v1/namespaces/azure-arc-acr-auth/services/http:acr-auth-acr-auth-extension-secretprovisioner-metrics:metrics/proxy/metrics' 2>$null
+    $raw = kubectl --context $NegativeCluster.Context get --raw '/api/v1/namespaces/azure-arc-acr-auth/services/http:acr-auth-acr-auth-extension-secretprovisioner-metrics:metrics/proxy/metrics' 2>$null
     return @($raw -split "`n" | Where-Object {
         $_ -match '^acr_auth_token_refresh_total\{result="success"\}' -or
         $_ -match '^acr_auth_secret_age_seconds\{namespace="gitops-(vision|speech)-a"\}'
@@ -432,30 +460,57 @@ function Get-ProvisionerMetrics {
 function Invoke-Positive {
     Write-Section 'Git commit: deploy four private workloads'
     $started = (Get-Date).ToUniversalTime()
+    Write-DemoStep -Number 1 -Name 'Git desired state' -Detail 'Publishing four credential-free Deployments.'
     $sha = Publish-Stage -Stage positive -Message 'Demo: deploy private ACR workloads'
+    Write-DemoStep -Number 2 -Name 'Microsoft Flux' -Detail "Both clusters applied $($sha.Substring(0, 7))."
+    Write-DemoStep -Number 3 -Name 'SecretProvisioner' -Detail 'Short-lived extension-owned pull Secrets were pre-warmed.'
     foreach ($cluster in $Clusters) {
         foreach ($workload in $cluster.Workloads) {
             Wait-DeploymentReady -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
         }
     }
-    Write-Host "Both clusters applied $($sha.Substring(0, 7))." -ForegroundColor Green
+    Write-DemoStep -Number 4 -Name 'AuthInjector' -Detail 'Stored Pods received azure-arc-acr-pull during admission.'
     Show-PositiveProof
+    Write-DemoStep -Number 5 -Name 'Kubelet + ACR' -Detail 'Private pulls completed and all four Pods are Ready.'
+    Show-JourneyBoard -GitSha $sha
     Write-Host "`nAuthInjector evidence:" -ForegroundColor Yellow
     Show-AuthLogs -Since $started -Pattern 'injected azure-arc-acr-pull'
     Write-Host "`nWebhook metric samples:" -ForegroundColor Yellow
     Get-MetricSample -MetricPattern '^acr_auth_webhook_admission_total\{reason="inject"\}' | ForEach-Object { Write-Host $_ }
     Write-Host "`nSecretProvisioner metrics:" -ForegroundColor Yellow
     Get-ProvisionerMetrics | ForEach-Object { Write-Host $_ }
+    Write-DemoStep -Number 6 -Name 'GitOps monitor' -Detail 'Refresh the cluster view to follow reconciliation and runtime activity.'
+}
+
+function Invoke-Scale {
+    Write-Section 'Git commit: expand to twelve private workloads'
+    $started = (Get-Date).ToUniversalTime()
+    Write-DemoStep -Number 1 -Name 'Git desired state' -Detail 'Adding batch and canary workloads without new credentials.'
+    $sha = Publish-Stage -Stage fleet -Message 'Demo: expand private ACR workload fleet'
+    Write-DemoStep -Number 2 -Name 'Microsoft Flux' -Detail "Both clusters applied $($sha.Substring(0, 7))."
+    Write-DemoStep -Number 3 -Name 'SecretProvisioner' -Detail 'The same four namespace-scoped Secrets serve twelve workloads.'
+    foreach ($cluster in $Clusters) {
+        foreach ($workload in @(Get-ClusterWorkloads -Cluster $cluster -IncludeFleet)) {
+            Wait-DeploymentReady -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
+        }
+    }
+    Write-DemoStep -Number 4 -Name 'AuthInjector' -Detail 'Every newly created Pod received the extension-owned reference.'
+    Show-PositiveProof -IncludeFleet
+    Write-DemoStep -Number 5 -Name 'Kubelet + ACR' -Detail 'Twelve always-pull workloads are Ready across three private registries.'
+    Show-JourneyBoard -GitSha $sha -IncludeFleet
+    Write-Host "`nFleet AuthInjector evidence:" -ForegroundColor Yellow
+    Show-AuthLogs -Since $started -Pattern 'injected azure-arc-acr-pull'
+    Write-DemoStep -Number 6 -Name 'GitOps monitor' -Detail 'Refresh the activity rail and watch the resource graph expand.'
 }
 
 function Wait-NegativePod {
     Wait-Until -TimeoutSeconds $NegativeTimeoutSeconds -Description "$NegativeNamespace/$NegativeDeployment Pod creation" -Condition {
-        $name = kubectl --context $Clusters[0].Context -n $NegativeNamespace get pod -l "app.kubernetes.io/name=$NegativeDeployment" -o jsonpath='{.items[0].metadata.name}' 2>$null
+        $name = kubectl --context $NegativeCluster.Context -n $NegativeNamespace get pod -l "app.kubernetes.io/name=$NegativeDeployment" -o jsonpath='{.items[0].metadata.name}' 2>$null
         return -not [string]::IsNullOrWhiteSpace($name)
     }
-    $pod = Get-PodName -Context $Clusters[0].Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
+    $pod = Get-PodName -Context $NegativeCluster.Context -Namespace $NegativeNamespace -Deployment $NegativeDeployment
     Wait-Until -TimeoutSeconds $NegativeTimeoutSeconds -Description "$pod ImagePullBackOff" -Condition {
-        $reason = kubectl --context $Clusters[0].Context -n $NegativeNamespace get pod $pod -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>$null
+        $reason = kubectl --context $NegativeCluster.Context -n $NegativeNamespace get pod $pod -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>$null
         return $reason -in @('ErrImagePull', 'ImagePullBackOff')
     }
     return $pod
@@ -463,10 +518,10 @@ function Wait-NegativePod {
 
 function Show-NegativeProof {
     param([string]$Pod)
-    $secret = kubectl --context $Clusters[0].Context -n $NegativeNamespace get secret azure-arc-acr-pull --ignore-not-found -o name
-    $podSecret = kubectl --context $Clusters[0].Context -n $NegativeNamespace get pod $Pod -o jsonpath='{.spec.imagePullSecrets[*].name}'
-    $waitingReason = kubectl --context $Clusters[0].Context -n $NegativeNamespace get pod $Pod -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}'
-    $warning = @(kubectl --context $Clusters[0].Context -n $NegativeNamespace get events --field-selector "involvedObject.name=$Pod,type=Warning" -o json | ConvertFrom-Json | Select-Object -ExpandProperty items | Sort-Object { $_.lastTimestamp } -Descending | Select-Object -First 1)
+    $secret = kubectl --context $NegativeCluster.Context -n $NegativeNamespace get secret azure-arc-acr-pull --ignore-not-found -o name
+    $podSecret = kubectl --context $NegativeCluster.Context -n $NegativeNamespace get pod $Pod -o jsonpath='{.spec.imagePullSecrets[*].name}'
+    $waitingReason = kubectl --context $NegativeCluster.Context -n $NegativeNamespace get pod $Pod -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}'
+    $warning = @(kubectl --context $NegativeCluster.Context -n $NegativeNamespace get events --field-selector "involvedObject.name=$Pod,type=Warning" -o json | ConvertFrom-Json | Select-Object -ExpandProperty items | Sort-Object { $_.lastTimestamp } -Descending | Select-Object -First 1)
     [pscustomobject]@{
         NamespaceMapped = $false
         GeneratedSecret = if ($secret) { $secret } else { '<none>' }
@@ -509,18 +564,25 @@ ResourceSyncNotifications_CL
 }
 
 function Invoke-Negative {
+    param([ValidateSet('negative', 'fleet-negative')][string]$Stage = 'negative')
     Write-Section 'Git commit: add unmapped namespace negative control'
     $started = (Get-Date).ToUniversalTime()
-    $sha = Publish-Stage -Stage negative -Message 'Demo: add unmapped ACR negative control'
+    Write-DemoStep -Number 1 -Name 'Git desired state' -Detail 'Adding the known-good image in an unmapped namespace.'
+    $sha = Publish-Stage -Stage $Stage -Message 'Demo: add unmapped ACR negative control'
+    Write-DemoStep -Number 2 -Name 'Microsoft Flux' -Detail "The isolated control attempted $($sha.Substring(0, 7))."
     $pod = Wait-NegativePod
+    Write-DemoStep -Number 3 -Name 'SecretProvisioner' -Detail 'No namespace mapping means no generated pull Secret.'
+    Write-DemoStep -Number 4 -Name 'AuthInjector' -Detail 'The Pod was deliberately left without an injected reference.'
     Write-Host "Negative control applied at $($sha.Substring(0, 7))." -ForegroundColor Green
     Show-NegativeProof -Pod $pod
+    Write-DemoStep -Number 5 -Name 'Kubelet + ACR' -Detail 'The real private registry rejected the unauthenticated pull.'
     Write-Host 'AuthInjector decision:' -ForegroundColor Yellow
     Show-AuthLogs -Since $started -Pattern "namespace-not-mapped|$NegativeNamespace"
     Write-Host 'Webhook metric samples:' -ForegroundColor Yellow
     Get-MetricSample -MetricPattern '^acr_auth_webhook_admission_total\{reason="namespace-not-mapped"\}' | ForEach-Object { Write-Host $_ }
     Write-Host 'Monitoring snapshot:' -ForegroundColor Yellow
     Show-MonitoringQuery -Since $started
+    Write-DemoStep -Number 6 -Name 'GitOps monitor' -Detail 'Compare blocked runtime health with the healthy mapped workloads.'
 }
 
 function Show-Status {
@@ -544,7 +606,7 @@ function Show-Status {
             kubectl --context $cluster.Context -n $workload.Namespace get deployment $workload.Deployment --ignore-not-found -o custom-columns='NAME:.metadata.name,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas,IMAGE:.spec.template.spec.containers[0].image'
         }
     }
-    kubectl --context $Clusters[0].Context -n $NegativeNamespace get deployment,pod --ignore-not-found
+    kubectl --context $NegativeCluster.Context -n $NegativeNamespace get deployment,pod --ignore-not-found
 }
 
 function Invoke-PreflightBase {
@@ -555,17 +617,27 @@ function Invoke-PreflightBase {
 function Initialize-Demo {
     Invoke-PreflightBase
     Write-Section 'Initialize isolated negative-control Flux application'
-    $existing = az k8s-configuration flux list --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters -o json | ConvertFrom-Json | Where-Object { $_.name -eq $NegativeFluxName }
+    $existing = az k8s-configuration flux list --subscription $Subscription --resource-group $NegativeCluster.ResourceGroup --cluster-name $NegativeCluster.Name --cluster-type connectedClusters -o json | ConvertFrom-Json | Where-Object { $_.name -eq $NegativeFluxName }
     if (-not $existing) {
-        az k8s-configuration flux create --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --scope cluster --namespace flux-system --kind git --url $OriginUrl --branch main --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true sync_interval=30s retry_interval=15s timeout=20s -o table
+        az k8s-configuration flux create --subscription $Subscription --resource-group $NegativeCluster.ResourceGroup --cluster-name $NegativeCluster.Name --cluster-type connectedClusters --name $NegativeFluxName --scope cluster --namespace flux-system --kind git --url $OriginUrl --branch main --kustomization name=negative-control path="./clusters/$($NegativeCluster.RepoPath)/negative-control" prune=true sync_interval=30s retry_interval=15s timeout=20s -o table
         Assert-LastExitCode 'create negative-control Flux configuration'
     }
     else {
-        az k8s-configuration flux update --subscription $Subscription --resource-group $Clusters[0].ResourceGroup --cluster-name $Clusters[0].Name --cluster-type connectedClusters --name $NegativeFluxName --kind git --url $OriginUrl --branch main --kustomization name=negative-control path=./clusters/hbroughton-acr-test-kind/negative-control prune=true sync_interval=30s retry_interval=15s timeout=20s -o none
+        az k8s-configuration flux update --subscription $Subscription --resource-group $NegativeCluster.ResourceGroup --cluster-name $NegativeCluster.Name --cluster-type connectedClusters --name $NegativeFluxName --kind git --url $OriginUrl --branch main --kustomization name=negative-control path="./clusters/$($NegativeCluster.RepoPath)/negative-control" prune=true sync_interval=30s retry_interval=15s timeout=20s -o none
         Assert-LastExitCode 'update negative-control Flux configuration'
         Write-Host 'Negative-control Flux configuration already exists; parameters refreshed.' -ForegroundColor DarkGray
     }
     Invoke-Preflight
+}
+
+function Assert-DemoBaseline {
+    foreach ($cluster in $Clusters) {
+        foreach ($workload in @(Get-ClusterWorkloads -Cluster $cluster -IncludeFleet)) {
+            if (kubectl --context $cluster.Context -n $workload.Namespace get deployment $workload.Deployment --ignore-not-found -o name) {
+                throw 'The demo is not at baseline. Run -Action Prepare before the presentation.'
+            }
+        }
+    }
 }
 
 Set-Location $RepoRoot
@@ -580,23 +652,17 @@ switch ($Action) {
         Invoke-LivePreflight
         Invoke-Positive
     }
+    'Scale' {
+        Invoke-LivePreflight
+        Invoke-Scale
+    }
     'Negative' {
         Invoke-LivePreflight
         Invoke-Negative
     }
     'Run' {
         Invoke-LivePreflight
-        $positiveExists = $false
-        foreach ($cluster in $Clusters) {
-            foreach ($workload in $cluster.Workloads) {
-                if (kubectl --context $cluster.Context -n $workload.Namespace get deployment $workload.Deployment --ignore-not-found -o name) {
-                    $positiveExists = $true
-                }
-            }
-        }
-        if ($positiveExists) {
-            throw 'The demo is not at baseline. Run -Action Prepare before the presentation.'
-        }
+        Assert-DemoBaseline
         $demoStarted = (Get-Date).ToUniversalTime()
         Invoke-Positive
         if (-not $NonInteractive) {
@@ -604,6 +670,22 @@ switch ($Action) {
         }
         Invoke-Negative
         Write-Host "`nDemo complete. Refresh the frontend and compare the healthy workload application with $NegativeOwnerName." -ForegroundColor Green
+        Show-MonitoringQuery -Since $demoStarted
+    }
+    'RunFleet' {
+        Invoke-LivePreflight
+        Assert-DemoBaseline
+        $demoStarted = (Get-Date).ToUniversalTime()
+        Invoke-Positive
+        if (-not $NonInteractive) {
+            Read-Host 'Core proof complete. Refresh the cluster activity view, then press Enter to expand the fleet'
+        }
+        Invoke-Scale
+        if (-not $NonInteractive) {
+            Read-Host 'Fleet proof complete. Refresh the resource counts, then press Enter for the unmapped control'
+        }
+        Invoke-Negative -Stage fleet-negative
+        Write-Host "`nFleet demo complete: twelve authenticated workloads remain healthy while the isolated control is blocked." -ForegroundColor Green
         Show-MonitoringQuery -Since $demoStarted
     }
     'Status' { Show-Status }
