@@ -52,6 +52,8 @@ Open these before sharing the screen:
 ```
 
 The script pauses between the positive and negative phases so you control the narration.
+Its on-stage preflight uses GitHub and direct Kubernetes readiness only; a transient Azure Resource
+Manager status/DNS issue cannot block the demo after `Prepare` has succeeded.
 
 ### 0:00-0:40 - Establish the proof boundary
 
@@ -144,6 +146,9 @@ configurations, namespaces, or the generated positive pull Secrets.
 
 # Recheck prerequisites only
 .\demo\Invoke-LiveDemo.ps1 -Action Preflight
+
+# Recheck only the on-stage GitHub/Kubernetes dependencies
+.\demo\Invoke-LiveDemo.ps1 -Action LivePreflight
 ```
 
 ## Reliability choices

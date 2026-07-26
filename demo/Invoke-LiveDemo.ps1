@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Initialize', 'Preflight', 'Prepare', 'Run', 'Positive', 'Negative', 'Status', 'Cleanup')]
+    [ValidateSet('Initialize', 'Preflight', 'LivePreflight', 'Prepare', 'Run', 'Positive', 'Negative', 'Status', 'Cleanup')]
     [string]$Action = 'Status',
     [switch]$NonInteractive,
     [string]$Subscription = 'ClusterConfig-SubLib-002',
@@ -218,6 +218,51 @@ function Test-ExtensionState {
     }
 }
 
+function Invoke-LivePreflight {
+    Write-Section 'Live preflight'
+    Assert-Tooling
+    Assert-CleanRepository
+
+    foreach ($cluster in $Clusters) {
+        $ready = kubectl --context $cluster.Context get --raw='/readyz' 2>$null
+        if ($ready -ne 'ok') {
+            throw "$($cluster.Context) API server is not ready."
+        }
+
+        foreach ($deployment in @('fluxconfig-agent', 'fluxconfig-controller', 'source-controller', 'kustomize-controller')) {
+            $available = kubectl --context $cluster.Context -n flux-system get deployment $deployment -o jsonpath='{.status.availableReplicas}' 2>$null
+            if ([int]$available -lt 1) {
+                throw "$($cluster.Name) Microsoft Flux deployment $deployment is unavailable."
+            }
+        }
+
+        $injectorReady = kubectl --context $cluster.Context -n azure-arc-acr-auth get deployment acr-auth-acr-auth-extension-authinjector -o jsonpath='{.status.readyReplicas}' 2>$null
+        $provisionerReady = kubectl --context $cluster.Context -n azure-arc-acr-auth get deployment acr-auth-acr-auth-extension-secretprovisioner -o jsonpath='{.status.readyReplicas}' 2>$null
+        if ([int]$injectorReady -lt 2 -or [int]$provisionerReady -lt 1) {
+            throw "$($cluster.Name) ACR Auth components are not ready."
+        }
+
+        $sourceUrl = kubectl --context $cluster.Context -n flux-system get "gitrepository/$MainFluxName" -o jsonpath='{.spec.url}' 2>$null
+        if ($sourceUrl -ne $OriginUrl) {
+            throw "$($cluster.Name) main Flux source is not the GitHub repository."
+        }
+
+        foreach ($workload in $cluster.Workloads) {
+            Wait-SecretReady -Context $cluster.Context -Namespace $workload.Namespace
+        }
+    }
+
+    $negativeSource = kubectl --context $Clusters[0].Context -n flux-system get "gitrepository/$NegativeFluxName" -o jsonpath='{.spec.url}' 2>$null
+    if ($negativeSource -ne $OriginUrl) {
+        throw 'The negative-control Flux source is not initialized from GitHub.'
+    }
+    if (kubectl --context $Clusters[0].Context -n $NegativeNamespace get secret azure-arc-acr-pull --ignore-not-found -o name) {
+        throw "$NegativeNamespace unexpectedly contains azure-arc-acr-pull."
+    }
+
+    Write-Host 'Live preflight passed: GitHub, both clusters, Microsoft Flux, ACR Auth, and positive Secrets are ready.' -ForegroundColor Green
+}
+
 function Invoke-Preflight {
     Write-Section 'Preflight'
     Assert-Tooling
@@ -285,7 +330,13 @@ function Wait-SecretReady {
 }
 
 function Invoke-Prepare {
-    Invoke-Preflight
+    param([switch]$FastPreflight)
+    if ($FastPreflight) {
+        Invoke-LivePreflight
+    }
+    else {
+        Invoke-Preflight
+    }
     Write-Section 'Reset Git to namespace and Secret prewarm'
     $sha = Publish-Stage -Stage baseline -Message 'Demo reset: prewarm namespaces'
 
@@ -436,17 +487,17 @@ ResourceSyncNotifications_CL
 | where tolower(ClusterResourceId) == tolower('$ClusterArmIdA')
 | where OwnerName in ('acr-auth-gitops-demo-workloads', '$NegativeOwnerName')
 | extend F=todynamic(Fields)
-| summarize arg_max(TimeGenerated, *) by OwnerName, Uid, Kind, Name, Namespace, Category
-| project TimeGenerated, OwnerName, Kind, Name, Namespace, Category,
-          Phase=tostring(F['status.phase']),
-          WaitingReason=tostring(F['status.containerStatuses[*].state.waiting.reason']),
-          ReadyReplicas=toint(F['status.readyReplicas'])
-| order by OwnerName asc, Kind asc, Name asc
+| summarize Latest=max(TimeGenerated), Rows=count(), Objects=dcount(Uid),
+            Kinds=make_set(Kind),
+            PodPhases=make_set(tostring(F['status.phase'])),
+            WaitingReasons=make_set(tostring(F['status.containerStatuses[*].state.waiting.reason']))
+  by OwnerName, Category
+| order by OwnerName asc, Category asc
 "@
     try {
         $rows = az monitor log-analytics query --subscription $Subscription --workspace $WorkspaceId --analytics-query $query --timespan P1D -o json | ConvertFrom-Json
         if ($rows.Count -gt 0) {
-            $rows | Select-Object OwnerName, Kind, Name, Namespace, Category, Phase, WaitingReason, ReadyReplicas, TimeGenerated | Format-Table -AutoSize -Wrap
+            $rows | Select-Object OwnerName, Category, Objects, Rows, Kinds, PodPhases, WaitingReasons, Latest | Format-Table -AutoSize -Wrap
         }
         else {
             Write-Host 'Monitoring rows are still ingesting. Refresh the frontend in a few seconds.' -ForegroundColor DarkYellow
@@ -522,18 +573,19 @@ Set-Location $RepoRoot
 switch ($Action) {
     'Initialize' { Initialize-Demo }
     'Preflight' { Invoke-Preflight }
+    'LivePreflight' { Invoke-LivePreflight }
     'Prepare' { Invoke-Prepare }
-    'Cleanup' { Invoke-Prepare }
+    'Cleanup' { Invoke-Prepare -FastPreflight }
     'Positive' {
-        Invoke-Preflight
+        Invoke-LivePreflight
         Invoke-Positive
     }
     'Negative' {
-        Invoke-Preflight
+        Invoke-LivePreflight
         Invoke-Negative
     }
     'Run' {
-        Invoke-Preflight
+        Invoke-LivePreflight
         $positiveExists = $false
         foreach ($cluster in $Clusters) {
             foreach ($workload in $cluster.Workloads) {
