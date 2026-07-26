@@ -107,6 +107,11 @@ The proof should read:
 This is stronger than using a nonexistent tag: it uses the same known-good private image and changes
 only namespace eligibility.
 
+For the five-minute frontend view, use the immediate Pod Health row (`status.phase=Pending` and
+waiting reason `ImagePullBackOff`). The monitoring backend polls Kubernetes Warning Events every
+eight minutes by default, so the richer Event row is supporting evidence and may arrive after the
+live slot. The controller always prints the Kubernetes Event immediately.
+
 ### 4:30-5:00 - Close in the frontend
 
 Refresh the frontend and compare:
