@@ -182,9 +182,9 @@ function Publish-Stage {
         Assert-LastExitCode 'git add demo stage'
         $staged = @(git diff --cached --name-only)
         if ($staged.Count -gt 0) {
-            git commit -m $Message
+            git commit -m $Message | Out-Host
             Assert-LastExitCode "commit $Stage stage"
-            git push origin main
+            git push origin main | Out-Host
             Assert-LastExitCode "push $Stage stage"
         }
         else {
