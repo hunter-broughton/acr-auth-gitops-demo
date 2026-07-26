@@ -28,3 +28,34 @@ Each Arc cluster has one Microsoft Flux configuration with two Kustomizations:
 The first commit keeps each workload phase on a harmless ConfigMap. The second commit adds
 `workloads.yaml` to the workload Kustomizations, making the four private-image Deployments visibly
 Git-authored and Git-activated.
+
+## Live demo environment
+
+Both Arc-enabled kind clusters use registered Azure extensions rather than manually installed Flux
+APIs:
+
+| Cluster | Microsoft Flux | Azure Flux configuration | ACR Auth |
+| --- | --- | --- | --- |
+| `hbroughton-acr-test-kind` | `microsoft.flux` `1.24.0` | `acr-auth-gitops-demo` | `microsoft.test.authinjector` `0.1.18` |
+| `acr-auth-demo` | `microsoft.flux` `1.24.0` | `acr-auth-gitops-demo` | `microsoft.test.authinjector` `0.1.18` |
+
+The Microsoft Flux controllers and CRDs are installed by the `flux` Azure extension Helm release in
+`flux-system`. The Azure Flux configurations reconcile this public repository over HTTPS and report
+`Compliant`.
+
+GitOps monitoring is installed on both clusters and exports to the same Log Analytics table while
+preserving each cluster's distinct ARM resource ID. The monitoring producer recognizes the
+Microsoft-managed labels and records `FluxConfigured=true` with configuration name
+`acr-auth-gitops-demo`.
+
+## Credential-free workload contract
+
+- Git contains only Namespace, ConfigMap, and Deployment manifests.
+- Deployment Pod templates contain no `imagePullSecrets`.
+- Each mapped namespace receives the extension-owned `azure-arc-acr-pull` Secret.
+- AuthInjector adds that Secret reference only to the stored Pod during CREATE admission.
+- Every Deployment uses `imagePullPolicy: Always`, forcing a real private registry pull.
+- ACR admin credentials, refresh tokens, and `.dockerconfigjson` are never committed or displayed.
+
+The deployed Pods should be Ready and should show `azure-arc-acr-pull` in
+`spec.imagePullSecrets`, while the corresponding Deployment templates remain empty.
