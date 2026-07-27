@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-acr-demo-phase
+  namespace: gitops-unmapped-control
+data:
+  state: waiting-for-unmapped-workload

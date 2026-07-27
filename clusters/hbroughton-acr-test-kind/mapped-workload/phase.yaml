@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-acr-demo-phase
+  namespace: gitops-vision-a
+data:
+  state: waiting-for-mapped-workload

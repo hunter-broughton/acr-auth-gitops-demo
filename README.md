@@ -1,93 +1,97 @@
-# ACR Auth GitOps Demo
+# Private ACR + GitOps Monitoring Demo
 
-This repository drives two Arc-enabled kind clusters through Microsoft Flux. Each workload uses a
-private ACR image with `imagePullPolicy: Always` and deliberately omits `imagePullSecrets`.
+This repository drives one Arc-enabled kind cluster through one Azure-managed Microsoft Flux Git
+source. Two Kustomizations deploy the same known-good private image; namespace membership in the
+Private ACR Support extension's `acrMap` is the only authorization difference.
 
 Canonical source: <https://github.com/hunter-broughton/acr-auth-gitops-demo>
 
-| Cluster | Namespace | Registry | Workload |
+| Kustomization | Namespace | `acrMap` | Expected Pod result |
 | --- | --- | --- | --- |
-| `hbroughton-acr-test-kind` | `gitops-vision-a` | `acrvisiontrainkgw7x.azurecr.io` | `vision-model-trainer` |
-| `hbroughton-acr-test-kind` | `gitops-speech-a` | `acrspeechtrainkgw7x.azurecr.io` | `speech-model-trainer` |
-| `acr-auth-demo` | `gitops-nlp-b` | `acrnlptrainkgw7x.azurecr.io` | `nlp-model-trainer` |
-| `acr-auth-demo` | `gitops-vision-b` | `acrvisiontrainkgw7x.azurecr.io` | `vision-model-trainer` |
+| `mapped-workload` | `gitops-vision-a` | `acrvisiontrainkgw7x.azurecr.io` | Pulls and remains Ready |
+| `unmapped-control` | `gitops-unmapped-control` | absent | `ImagePullBackOff` with Warning events |
 
-The optional fleet profile adds batch and canary variants in each mapped namespace. It expands the
-same topology from four to twelve Deployments without adding credentials, registries, namespace
-mappings, or Azure resources.
+Both Deployments use `acrvisiontrainkgw7x.azurecr.io/model-trainer:v1`, set
+`imagePullPolicy: Always`, and omit `imagePullSecrets`. The extension owns the credential lifecycle
+and injects `azure-arc-acr-pull` only into Pods created in the mapped namespace.
 
-The namespace kustomizations reconcile first. Workload kustomizations depend on them, allowing the
-ACR Auth SecretProvisioner to create `azure-arc-acr-pull` before the Deployments are enabled in the
-second demo commit.
+## Live topology
 
-Each Arc cluster has one Microsoft Flux configuration with two Kustomizations:
+- Arc cluster: `hbroughton-acr-test-kind`
+- Microsoft Flux extension: `microsoft.flux` `1.24.0`
+- FluxConfiguration/GitRepository: `acr-auth-gitops-demo`
+- Kustomizations: `mapped-workload` and `unmapped-control`
+- Private ACR Support extension: `microsoft.test.authinjector` `0.1.18`, release train `merge`
 
-| Cluster | Kustomization | Repository path | Dependency |
-| --- | --- | --- | --- |
-| `hbroughton-acr-test-kind` | `namespaces` | `./clusters/hbroughton-acr-test-kind/namespaces` | none |
-| `hbroughton-acr-test-kind` | `workloads` | `./clusters/hbroughton-acr-test-kind/workloads` | `namespaces` |
-| `acr-auth-demo` | `namespaces` | `./clusters/acr-auth-demo/namespaces` | none |
-| `acr-auth-demo` | `workloads` | `./clusters/acr-auth-demo/workloads` | `namespaces` |
+The registered Private ACR Support installation command shown during the presentation is:
 
-The first commit keeps each workload phase on a harmless ConfigMap. The second commit adds
-`workloads.yaml` to the workload Kustomizations, making the four private-image Deployments visibly
-Git-authored and Git-activated.
+```powershell
+az k8s-extension create `
+  --subscription 0e750457-5252-493e-95a3-e40e6a460bf0 `
+  --resource-group hbroughton-acr-auth-test `
+  --cluster-name hbroughton-acr-test-kind `
+  --cluster-type connectedClusters `
+  --name acr-auth `
+  --extension-type microsoft.test.authinjector `
+  --release-train merge `
+  --version 0.1.18 `
+  --auto-upgrade-minor-version false `
+  --configuration-settings acrMap.gitops-vision-a=acrvisiontrainkgw7x.azurecr.io
+```
 
-## Live demo environment
+`gitops-unmapped-control` is deliberately absent from that command.
 
-Both Arc-enabled kind clusters use registered Azure extensions rather than manually installed Flux
-APIs:
+## Demo workflow
 
-| Cluster | Microsoft Flux | Azure Flux configuration | ACR Auth |
-| --- | --- | --- | --- |
-| `hbroughton-acr-test-kind` | `microsoft.flux` `1.24.0` | `acr-auth-gitops-demo` | `microsoft.test.authinjector` `0.1.18` |
-| `acr-auth-demo` | `microsoft.flux` `1.24.0` | `acr-auth-gitops-demo` | `microsoft.test.authinjector` `0.1.18` |
+Run the one-time migration after committing this topology. It removes the old separate negative
+FluxConfiguration and the demo FluxConfiguration from the retired second cluster, narrows the ACR
+mapping, and recreates `acr-auth-gitops-demo` with exactly two Kustomizations:
 
-The Microsoft Flux controllers and CRDs are installed by the `flux` Azure extension Helm release in
-`flux-system`. The Azure Flux configurations reconcile this public repository over HTTPS and report
-`Compliant`.
+```powershell
+.\demo\Invoke-LiveDemo.ps1 -Action Initialize
+```
 
-GitOps monitoring is installed on both clusters and exports to the same Log Analytics table while
-preserving each cluster's distinct ARM resource ID. The monitoring producer recognizes the
-Microsoft-managed labels and records `FluxConfigured=true` with configuration name
-`acr-auth-gitops-demo`.
-
-## Credential-free workload contract
-
-- Git contains only Namespace, ConfigMap, and Deployment manifests.
-- Deployment Pod templates contain no `imagePullSecrets`.
-- Each mapped namespace receives the extension-owned `azure-arc-acr-pull` Secret.
-- AuthInjector adds that Secret reference only to the stored Pod during CREATE admission.
-- Every Deployment uses `imagePullPolicy: Always`, forcing a real private registry pull.
-- ACR admin credentials, refresh tokens, and `.dockerconfigjson` are never committed or displayed.
-
-The deployed Pods should be Ready and should show `azure-arc-acr-pull` in
-`spec.imagePullSecrets`, while the corresponding Deployment templates remain empty.
-
-## Five-minute live demo
-
-The repeatable presenter automation and talk track are in:
-
-- [`demo/Invoke-LiveDemo.ps1`](demo/Invoke-LiveDemo.ps1)
-- [`demo/FIVE-MINUTE-RUNBOOK.md`](demo/FIVE-MINUTE-RUNBOOK.md)
-
-Run `Initialize` once, `Prepare` before the meeting, `Presenter` on stage, and `Cleanup` afterward.
-`Presenter` is a side-by-side terminal and GitOps Monitoring experience. The terminal uses six
-concise AI model-training story modules, renders manifest proof, shows token rotation and Secret
-recreation, and deploys through Microsoft Flux. The monitoring blade remains visible for resource
-topology and health. GitHub stays the real source but does not need to be open. The older `Run` action
-remains available for the original multi-window presentation.
-
-For a longer scale-focused presentation, use `RunFleet`. It deploys the core four workloads, expands
-to twelve, then retains all twelve healthy workloads while the isolated negative control fails:
+Reset to the empty two-tree baseline before presenting:
 
 ```powershell
 .\demo\Invoke-LiveDemo.ps1 -Action Prepare
-.\demo\Invoke-LiveDemo.ps1 -Action RunFleet
+```
+
+Place the GitOps Monitoring blade beside the terminal, select `hbroughton-acr-test-kind`, and run:
+
+```powershell
+.\demo\Invoke-LiveDemo.ps1 -Action Presenter
+```
+
+The presenter pauses twice:
+
+1. Open `mapped-workload`, then continue and watch its Deployment, ReplicaSet, and healthy Pod
+   appear.
+2. Inspect the healthy tree, switch to `unmapped-control`, then continue and watch its Pod reach
+   `ImagePullBackOff` while Warning events appear.
+
+GitHub and Microsoft Flux remain the real desired-state path throughout. No Secret data is read or
+displayed.
+
+## Other actions
+
+```powershell
+# Validate tools, Azure topology, and the namespace mapping.
+.\demo\Invoke-LiveDemo.ps1 -Action Preflight
+
+# Publish only the mapped stage or the final negative stage.
+.\demo\Invoke-LiveDemo.ps1 -Action Mapped
+.\demo\Invoke-LiveDemo.ps1 -Action Negative
+
+# Print current Azure, Flux, and workload state.
+.\demo\Invoke-LiveDemo.ps1 -Action Status
+
+# Print the extension installation command without changing anything.
+.\demo\Invoke-LiveDemo.ps1 -Action ShowInstallCommand
+
+# Return both resource trees to their no-Deployment baseline.
 .\demo\Invoke-LiveDemo.ps1 -Action Cleanup
 ```
 
-Cluster and workload inventory lives in [`demo/topology.json`](demo/topology.json). The controller
-iterates that file, so adding a future cluster does not require PowerShell changes. Cluster creation,
-Arc connection, registered extension installation, ACR role assignment, and monitoring installation
-remain explicit offstage prerequisites; the demo controller never provisions Azure resources.
+The detailed talk track is in [demo/FIVE-MINUTE-RUNBOOK.md](demo/FIVE-MINUTE-RUNBOOK.md), and the
+machine-readable environment contract is in [demo/topology.json](demo/topology.json).

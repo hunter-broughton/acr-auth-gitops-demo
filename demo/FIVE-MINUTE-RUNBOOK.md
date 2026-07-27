@@ -1,263 +1,149 @@
-# Five-Minute ACR Auth + GitOps Monitoring Demo
+# Five-Minute Private ACR + GitOps Monitoring Demo
 
-## The story
+## Story
 
-One Git commit deploys four credential-free workloads through Microsoft Flux to two Arc-enabled
-kind clusters. The ACR Auth Extension materializes short-lived registry credentials and mutates the
-created Pods, allowing real pulls from three private ACRs. A second Git commit creates an identical
-workload in an unmapped namespace: no Secret is created, no reference is injected, and Kubernetes
-shows `ImagePullBackOff`. GitOps monitoring correlates Flux compliance and workload health for both
-outcomes.
+One Arc cluster reconciles one GitHub source through the registered Microsoft Flux extension. The
+source contains two Kustomizations that use the same private image:
 
-Do not install or update extensions during the five-minute presentation. The extensions, Azure Flux
-configurations, namespaces, and positive pull Secrets are pre-warmed before the audience arrives.
+- `mapped-workload` runs in `gitops-vision-a`, which is present in the extension's `acrMap`.
+- `unmapped-control` runs in `gitops-unmapped-control`, which is absent from `acrMap`.
 
-## One-time setup
+The first resource tree becomes healthy. The second reaches `ImagePullBackOff` and emits Warning
+events. Cluster, source, registry, image, and workload shape stay fixed; only namespace authorization
+changes.
+
+## One-time migration
+
+Commit and push the new repository topology before running:
 
 ```powershell
 Set-Location C:\Users\t-hbroughton\Documents\Milestone-2\acr-auth-gitops-demo
 .\demo\Invoke-LiveDemo.ps1 -Action Initialize
 ```
 
-This creates a separate Azure-managed Microsoft Flux configuration named
-`acr-auth-negative-control`. It uses a 20-second health timeout, so the intentionally unhealthy
-application turns clearly non-compliant without affecting the positive applications.
+`Initialize` performs the live topology migration:
 
-## Before the meeting
+- Prints the complete `microsoft.test.authinjector` install command, including
+  `acrMap.gitops-vision-a=acrvisiontrainkgw7x.azurecr.io`.
+- Narrows the installed extension configuration to that mapped namespace.
+- Deletes the old `acr-auth-negative-control` FluxConfiguration.
+- Deletes the demo FluxConfiguration from the retired `acr-auth-demo` cluster.
+- Recreates `acr-auth-gitops-demo` on `hbroughton-acr-test-kind` with only `mapped-workload` and
+  `unmapped-control`.
 
-Run this 10-15 minutes before presenting:
+## Before presenting
+
+Run this 10 minutes before the meeting:
 
 ```powershell
 .\demo\Invoke-LiveDemo.ps1 -Action Prepare
 ```
 
-`Prepare` is idempotent. It commits a reset only if needed, reconciles exact Git SHAs, removes prior
-demo Deployments and Pods through Flux pruning, preserves the four namespaces, waits for four unexpired
-extension-owned pull Secrets, clears demo namespace Events, and verifies that the negative namespace
-is not in either `acrMap`.
+`Prepare` publishes the baseline, waits for the exact Git revision on both Kustomizations, verifies
+that both Deployments are absent, confirms the mapped namespace has `azure-arc-acr-pull`, confirms
+the unmapped namespace does not, and clears prior negative-control events.
 
-The Presenter automation completes in about **100 seconds without narration**. The six displayed
-story modules and Enter-controlled stops are paced for a five-minute presentation.
+Arrange two windows:
 
-For the recommended presentation, place the GitOps Monitoring blade on one side of the screen and a
-large PowerShell terminal on the other. Filter the blade to `hbroughton-acr-test-kind`. The terminal
-contains the story, actions, and private ACR evidence; the blade shows the resource graph and health
-changes. GitHub remains the real Flux source but does not need to be open.
+1. GitOps Monitoring blade filtered to `hbroughton-acr-test-kind` and source
+   `acr-auth-gitops-demo`.
+2. A large PowerShell terminal in the repository root.
 
-## Recommended side-by-side presentation
+Start the presenter:
 
 ```powershell
 .\demo\Invoke-LiveDemo.ps1 -Action Presenter
 ```
 
-The terminal uses the same concise `STEP`, `[OK]`, `[X]`, and note style as the original Private ACR
-demo. It pauses between six timed modules; refresh the monitoring blade at the two prompts, then press
-Enter. The combined view shows:
+## 0:00-1:00 - Establish the contract
 
-- Git-authored image, `imagePullPolicy`, and missing `imagePullSecrets` fields.
-- The latest real `ExpiringSoon -> minted token -> provisioned Secret` rotation cycle.
-- A deterministic live Secret deletion/recreation using safe metadata only.
-- Exact Microsoft Flux revision, admission injection, ACR pull, and Pod readiness.
-- The unmapped negative control and `ImagePullBackOff`.
-- A compact Log Analytics comparison from GitOps Monitoring.
-
-The former `frontend-demo-source` and `missing-app-artifact` fixtures were removed so the selected
-cluster contains only the mapped workload application and isolated negative control for this demo.
-
-No Secret `.data` is read or displayed. The recreation step runs while no demo workload exists and
-waits for the extension-owned Secret to be healthy before deploying.
-
-## Optional multi-window presentation
-
-Open these before sharing the screen:
-
-1. GitHub: <https://github.com/hunter-broughton/acr-auth-gitops-demo/commits/main>
-2. The monitoring frontend filtered to `acr-auth-gitops-demo`.
-3. One large PowerShell terminal in the repository root.
-
-### Run the multi-window presentation
+The terminal prints the registered extension installation command:
 
 ```powershell
-.\demo\Invoke-LiveDemo.ps1 -Action Run
+az k8s-extension create `
+  --subscription 0e750457-5252-493e-95a3-e40e6a460bf0 `
+  --resource-group hbroughton-acr-auth-test `
+  --cluster-name hbroughton-acr-test-kind `
+  --cluster-type connectedClusters `
+  --name acr-auth `
+  --extension-type microsoft.test.authinjector `
+  --release-train merge `
+  --version 0.1.18 `
+  --auto-upgrade-minor-version false `
+  --configuration-settings acrMap.gitops-vision-a=acrvisiontrainkgw7x.azurecr.io
 ```
 
-The script pauses between the positive and negative phases so you control the narration.
-Its on-stage preflight uses GitHub and direct Kubernetes readiness only; a transient Azure Resource
-Manager status/DNS issue cannot block the demo after `Prepare` has succeeded.
+Call out three details:
 
-### 0:00-0:40 - Establish the proof boundary
+- This is a registered Arc extension installation, not a manually installed webhook.
+- The map authorizes one namespace for one private registry.
+- `gitops-unmapped-control` is not authorized.
 
-- Show GitHub: four Deployments reference three private ACRs.
-- Point out `imagePullPolicy: Always` and the absence of `imagePullSecrets`.
-- State that ACR admin and anonymous pull are disabled.
-- Explain that one commit fans out to two Arc clusters through Microsoft Flux.
+In the blade, open `mapped-workload`. Its monitoring owner is
+`acr-auth-gitops-demo-mapped-workload`. Press Enter.
 
-### 0:40-2:10 - Positive commit
+## 1:00-2:45 - Watch the mapped tree become healthy
 
-Press Enter/start the script. It pushes `Demo: deploy private ACR workloads`, forces both Flux
-sources to reconcile, and waits for the exact commit on both clusters.
+The script publishes `Demo: add mapped private ACR workload` and forces the one Microsoft Flux
+source to reconcile the exact commit. Keep the mapped resource tree open and watch these resources
+appear:
 
-Narrate the output:
+1. Deployment `vision-model-trainer`
+2. ReplicaSet
+3. Pod
 
-- Microsoft Flux applies the same Git revision to both clusters.
-- Git-authored Deployment templates still show `<none>` for a pull Secret.
-- Stored Pods show `azure-arc-acr-pull`, proving CREATE-time admission mutation.
-- Four Ready workloads pulled from vision, speech, and NLP ACRs.
-- AuthInjector logs and `acr_auth_webhook_admission_total{reason="inject"}` support the proof.
-- Secret expiry plus `acr_auth_token_refresh_total` and `acr_auth_secret_age_seconds` prove that
-  SecretProvisioner is maintaining short-lived material without displaying its payload.
+The terminal proves:
 
-Refresh the frontend. Show the two workload applications per cluster, their Git revision/compliance,
-and healthy Deployment/ReplicaSet/Pod trees.
+- Git image: `acrvisiontrainkgw7x.azurecr.io/model-trainer:v1`
+- Git `imagePullPolicy`: `Always`
+- Git `imagePullSecrets`: absent
+- Stored Deployment template pull Secret: absent
+- Stored Pod pull Secret: `azure-arc-acr-pull`
+- Pod: Ready after a real private pull
 
-### 2:10-3:20 - Explain the integration
+Refresh the tree once if Log Analytics ingestion has not caught up. Keep the mapped Pod visible long
+enough to establish the healthy result, then switch to `unmapped-control`. Its monitoring owner is
+`acr-auth-gitops-demo-unmapped-control`. Press Enter.
 
-Use the healthy view to connect the two projects:
+## 2:45-4:30 - Watch the unmapped tree fail
 
-1. Git is desired state.
-2. Microsoft Flux reconciles it.
-3. ACR Auth supplies short-lived authentication without changing Git.
-4. The kubelet performs a real private pull.
-5. Monitoring reports compliance, workload health, lifecycle, and collector coverage.
+The script publishes `Demo: add unmapped private ACR control`. The mapped Deployment remains healthy
+while the second Kustomization creates an otherwise equivalent Deployment using the same image.
 
-Avoid opening Secret data. Showing Secret name, type, and expiry annotation is sufficient.
+Watch the unmapped tree add its Deployment, ReplicaSet, and Pod. The Pod transitions through
+`ErrImagePull` to `ImagePullBackOff`.
 
-### 3:20-4:30 - Negative-control commit
+The terminal proves:
 
-Press Enter. The script pushes `Demo: add unmapped ACR negative control` and reconciles the separate
-negative-control Flux application.
+- Namespace mapping: absent
+- Namespace `azure-arc-acr-pull` Secret: absent
+- Injected Pod pull Secret: absent
+- Waiting reason: `ErrImagePull` or `ImagePullBackOff`
+- Kubernetes Warning events: private registry authorization failure
 
-The proof should read:
+The script prints Kubernetes events immediately. Monitoring Health should follow quickly; the
+backend's polled Event category can arrive later than the five-minute slot, so do not wait on an
+Event row to establish the negative result.
 
-- Namespace mapping: absent.
-- Generated Secret: `<none>`.
-- Injected Pod Secret: `<none>`.
-- Pod state: `ErrImagePull` then `ImagePullBackOff`.
-- AuthInjector decision: `namespace-not-mapped`.
-- Kubernetes Warning Event: private pull authorization failure.
+## 4:30-5:00 - Compare outcomes
 
-This is stronger than using a nonexistent tag: it uses the same known-good private image and changes
-only namespace eligibility.
+Show both monitoring owners under the same Git source:
 
-For the five-minute frontend view, use the immediate Pod Health row (`status.phase=Pending` and
-waiting reason `ImagePullBackOff`). The monitoring backend polls Kubernetes Warning Events every
-eight minutes by default, so the richer Event row is supporting evidence and may arrive after the
-live slot. The controller always prints the Kubernetes Event immediately.
+| Owner | Runtime result | Explanation |
+| --- | --- | --- |
+| `acr-auth-gitops-demo-mapped-workload` | Ready | Namespace is mapped; Secret is provisioned and injected |
+| `acr-auth-gitops-demo-unmapped-control` | `ImagePullBackOff` | Namespace is unmapped; no Secret is provisioned or injected |
 
-### 4:30-5:00 - Close in the frontend
+Close with: one desired-state source produced both outcomes, and GitOps Monitoring explains the
+runtime difference without exposing credentials.
 
-Refresh the frontend and compare:
-
-- `acr-auth-gitops-demo-workloads`: compliant GitOps, healthy workloads, authenticated pulls.
-- `acr-auth-negative-control-negative-control`: intentionally non-compliant Kustomization, unhealthy
-  Pod with `ImagePullBackOff`, no injected Secret.
-
-Close with: the same desired-state pipeline produced both results; the namespace-to-ACR contract is
-the only difference, and the monitoring extension explains that difference without exposing a
-credential.
-
-## Extended fleet showcase
-
-Use this for a seven-to-ten-minute scale narrative, not the five-minute slot:
-
-```powershell
-.\demo\Invoke-LiveDemo.ps1 -Action Prepare
-.\demo\Invoke-LiveDemo.ps1 -Action RunFleet
-```
-
-`RunFleet` preserves the core positive phase, then pauses before a second Git commit expands four
-Deployments to twelve. The four pre-warmed namespace Secrets serve all twelve workloads, so the
-journey board can compare one Git SHA, Flux application, Secret reuse, admission injection, private
-pull confirmation, and runtime readiness per cluster. A final `fleet-negative` stage keeps the
-twelve mapped workloads healthy while adding the same isolated unmapped control.
-
-The script emits six numbered steps for every phase:
-
-1. Git desired state
-2. Microsoft Flux reconciliation
-3. SecretProvisioner readiness
-4. AuthInjector admission
-5. Kubelet and private ACR result
-6. GitOps monitoring refresh
-
-You can run only the expansion after a positive phase with:
-
-```powershell
-.\demo\Invoke-LiveDemo.ps1 -Action Scale
-```
-
-Do not use `Scale` for the timed five-minute path. Use `Run`, which remains the rehearsed four-workload
-sequence.
-
-### Adding another registered cluster
-
-1. Connect and validate the cluster offstage; install Microsoft Flux, ACR Auth, and GitOps monitoring.
-2. Add its namespace/workload Kustomizations under `clusters/<cluster-name>`.
-3. Add one workload stage file to every directory under `demo/stages`.
-4. Add the cluster, context, resource group, ARM ID, stage filename, and workload inventory to
-  `demo/topology.json`.
-5. Run `Preflight`, `Prepare`, and `RunFleet -NonInteractive` before presenting.
-
-This deliberately does not automate Azure resource creation. A failed or partially onboarded cluster
-cannot silently enter the live topology.
-
-## After the meeting
+## After presenting
 
 ```powershell
 .\demo\Invoke-LiveDemo.ps1 -Action Cleanup
 ```
 
-This returns Git and both clusters to the pre-warmed baseline. It does not remove extensions, Flux
-configurations, namespaces, or the generated positive pull Secrets.
+`Cleanup` publishes the empty baseline and waits for Flux pruning. It preserves the cluster,
+registered extensions, source, Kustomizations, namespaces, and extension-owned mapped Secret.
 
-## Useful commands
-
-```powershell
-# Read-only current status
-.\demo\Invoke-LiveDemo.ps1 -Action Status
-
-# Rehearse the single-terminal presenter flow without pauses
-.\demo\Invoke-LiveDemo.ps1 -Action Presenter -NonInteractive
-
-# Run without the narration pause (rehearsal/CI)
-.\demo\Invoke-LiveDemo.ps1 -Action Run -NonInteractive
-
-# Recheck prerequisites only
-.\demo\Invoke-LiveDemo.ps1 -Action Preflight
-
-# Recheck only the on-stage GitHub/Kubernetes dependencies
-.\demo\Invoke-LiveDemo.ps1 -Action LivePreflight
-```
-
-## Reliability choices
-
-- **Prewarm outside the five minutes:** extension install, Flux install, ACR roles, namespaces, and
-  positive Secrets are not live-demo dependencies.
-- **Exact Git SHA waits:** the script does not mistake an old `Ready=True` for the new commit.
-- **Full-file stage templates:** no fragile YAML line editing.
-- **`imagePullPolicy: Always`:** Kubernetes contacts the registry whenever the container launches;
-  cached layers do not remove the registry resolution step.
-- **Known-good image for the negative control:** failure demonstrates missing authentication, not a
-  typo or missing artifact.
-- **Separate negative Flux application:** positive applications remain green while the control turns
-  red within its 20-second health timeout.
-- **Kubernetes state is the immediate proof:** Log Analytics and the frontend are supporting views,
-  so ingestion latency cannot derail the live sequence.
-
-## Research basis
-
-- Microsoft documents `microsoft.flux` as the Arc cluster extension that installs Flux controllers,
-  with one Git source and one or more dependent Kustomizations per Flux configuration:
-  <https://learn.microsoft.com/azure/azure-arc/kubernetes/tutorial-use-gitops-flux2>
-- Microsoft describes Flux as pull-based desired-state reconciliation and supports dependencies and
-  cluster-scale deployment:
-  <https://learn.microsoft.com/azure/azure-arc/kubernetes/conceptual-gitops-flux2>
-- Kubernetes documents that mutating admission webhooks run before validation and can return a
-  JSONPatch that changes the admitted Pod:
-  <https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/>
-- Kubernetes documents that `imagePullPolicy: Always` asks the runtime to contact the registry on
-  every launch and that private images without credentials enter `ImagePullBackOff`, with retry delay
-  increasing up to five minutes:
-  <https://kubernetes.io/docs/concepts/containers/images/>
-- Kubernetes documents `Waiting` container state and recommends Pod Events/status for diagnosis:
-  <https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/>
+No action reads or displays Secret `.data`.

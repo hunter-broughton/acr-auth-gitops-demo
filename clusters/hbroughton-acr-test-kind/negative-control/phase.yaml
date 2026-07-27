@@ -1,9 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: private-acr-negative-control-phase
-  namespace: gitops-unmapped-control
-  labels:
-    demo.microsoft.com/scenario: private-acr-negative-control
-data:
-  state: waiting-for-negative-control-commit

@@ -1,42 +1,32 @@
 {
+  "subscription": "0e750457-5252-493e-95a3-e40e6a460bf0",
+  "repositoryUrl": "https://github.com/hunter-broughton/acr-auth-gitops-demo.git",
+  "fluxConfiguration": "acr-auth-gitops-demo",
+  "acrAuthExtension": {
+    "name": "acr-auth",
+    "type": "microsoft.test.authinjector",
+    "version": "0.1.18",
+    "releaseTrain": "merge"
+  },
   "clusters": [
     {
-      "Name": "hbroughton-acr-test-kind",
-      "ResourceGroup": "hbroughton-acr-auth-test",
-      "Context": "kind-hbroughton-acr-test-kind",
-      "RepoPath": "hbroughton-acr-test-kind",
-      "StageFile": "cluster-a-workloads.yaml",
-      "ClusterResourceId": "/subscriptions/0e750457-5252-493e-95a3-e40e6a460bf0/resourceGroups/hbroughton-acr-auth-test/providers/Microsoft.Kubernetes/connectedClusters/hbroughton-acr-test-kind",
-      "NegativeControl": true,
-      "Workloads": [
-        { "Namespace": "gitops-vision-a", "Deployment": "vision-model-trainer", "Registry": "acrvisiontrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-speech-a", "Deployment": "speech-model-trainer", "Registry": "acrspeechtrainkgw7x.azurecr.io" }
-      ],
-      "FleetWorkloads": [
-        { "Namespace": "gitops-vision-a", "Deployment": "vision-batch-trainer", "Registry": "acrvisiontrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-vision-a", "Deployment": "vision-canary-trainer", "Registry": "acrvisiontrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-speech-a", "Deployment": "speech-batch-trainer", "Registry": "acrspeechtrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-speech-a", "Deployment": "speech-canary-trainer", "Registry": "acrspeechtrainkgw7x.azurecr.io" }
-      ]
-    },
-    {
-      "Name": "acr-auth-demo",
-      "ResourceGroup": "acr-auth-demo",
-      "Context": "kind-acr-auth-demo",
-      "RepoPath": "acr-auth-demo",
-      "StageFile": "cluster-b-workloads.yaml",
-      "ClusterResourceId": "/subscriptions/0e750457-5252-493e-95a3-e40e6a460bf0/resourceGroups/acr-auth-demo/providers/Microsoft.Kubernetes/connectedClusters/acr-auth-demo",
-      "NegativeControl": false,
-      "Workloads": [
-        { "Namespace": "gitops-nlp-b", "Deployment": "nlp-model-trainer", "Registry": "acrnlptrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-vision-b", "Deployment": "vision-model-trainer", "Registry": "acrvisiontrainkgw7x.azurecr.io" }
-      ],
-      "FleetWorkloads": [
-        { "Namespace": "gitops-nlp-b", "Deployment": "nlp-batch-trainer", "Registry": "acrnlptrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-nlp-b", "Deployment": "nlp-canary-trainer", "Registry": "acrnlptrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-vision-b", "Deployment": "vision-batch-trainer", "Registry": "acrvisiontrainkgw7x.azurecr.io" },
-        { "Namespace": "gitops-vision-b", "Deployment": "vision-canary-trainer", "Registry": "acrvisiontrainkgw7x.azurecr.io" }
-      ]
+      "name": "hbroughton-acr-test-kind",
+      "resourceGroup": "hbroughton-acr-auth-test",
+      "context": "kind-hbroughton-acr-test-kind",
+      "repoPath": "hbroughton-acr-test-kind",
+      "clusterResourceId": "/subscriptions/0e750457-5252-493e-95a3-e40e6a460bf0/resourceGroups/hbroughton-acr-auth-test/providers/Microsoft.Kubernetes/connectedClusters/hbroughton-acr-test-kind"
     }
-  ]
+  ],
+  "mappedWorkload": {
+    "namespace": "gitops-vision-a",
+    "deployment": "vision-model-trainer",
+    "registry": "acrvisiontrainkgw7x.azurecr.io",
+    "image": "model-trainer:v1"
+  },
+  "unmappedWorkload": {
+    "namespace": "gitops-unmapped-control",
+    "deployment": "unmapped-model-trainer",
+    "registry": "acrvisiontrainkgw7x.azurecr.io",
+    "image": "model-trainer:v1"
+  }
 }

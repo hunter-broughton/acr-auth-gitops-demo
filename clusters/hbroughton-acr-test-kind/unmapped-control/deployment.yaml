@@ -5,7 +5,7 @@ metadata:
   namespace: gitops-unmapped-control
   labels:
     app.kubernetes.io/name: unmapped-model-trainer
-    demo.microsoft.com/scenario: private-acr-negative-control
+    demo.microsoft.com/scenario: private-acr-unmapped
 spec:
   replicas: 1
   selector:
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: unmapped-model-trainer
-        demo.microsoft.com/scenario: private-acr-negative-control
+        demo.microsoft.com/scenario: private-acr-unmapped
     spec:
       containers:
         - name: trainer
