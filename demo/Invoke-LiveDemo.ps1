@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Initialize', 'Preflight', 'LivePreflight', 'Prepare', 'Run', 'RunFleet', 'Positive', 'Scale', 'Negative', 'Status', 'Cleanup')]
+    [ValidateSet('Initialize', 'Preflight', 'LivePreflight', 'Prepare', 'Run', 'Presenter', 'RunFleet', 'Positive', 'Scale', 'Negative', 'Status', 'Cleanup')]
     [string]$Action = 'Status',
     [switch]$NonInteractive,
     [string]$Subscription = 'ClusterConfig-SubLib-002',
@@ -37,6 +37,32 @@ function Write-Section {
 function Write-DemoStep {
     param([int]$Number, [string]$Name, [string]$Detail)
     Write-Host ("[{0}/6] {1,-18} {2}" -f $Number, $Name, $Detail) -ForegroundColor Yellow
+}
+
+function Write-PresenterCue {
+    param(
+        [string]$Time,
+        [string]$Title,
+        [string]$Say,
+        [string]$Do = ''
+    )
+    Write-Host "`n================================================================" -ForegroundColor DarkCyan
+    Write-Host "[$Time] $Title" -ForegroundColor Cyan
+    if ($Do) {
+        Write-Host "DO:  $Do" -ForegroundColor Yellow
+    }
+    Write-Host 'SAY:' -ForegroundColor Green
+    foreach ($line in ($Say -split "`n")) {
+        Write-Host "  $line" -ForegroundColor White
+    }
+    Write-Host "================================================================" -ForegroundColor DarkCyan
+}
+
+function Wait-PresenterAdvance {
+    param([string]$Prompt = 'Press Enter for the next section')
+    if (-not $NonInteractive) {
+        [void](Read-Host $Prompt)
+    }
 }
 
 function Get-ClusterWorkloads {
@@ -170,7 +196,8 @@ function Copy-Stage {
 function Publish-Stage {
     param(
         [ValidateSet('baseline', 'positive', 'negative', 'fleet', 'fleet-negative')][string]$Stage,
-        [string]$Message
+        [string]$Message,
+        [switch]$Quiet
     )
     Push-Location $RepoRoot
     try {
@@ -179,9 +206,19 @@ function Publish-Stage {
         Assert-LastExitCode 'git add demo stage'
         $staged = @(git diff --cached --name-only)
         if ($staged.Count -gt 0) {
-            git commit -m $Message | Out-Host
+            if ($Quiet) {
+                git commit -m $Message | Out-Null
+            }
+            else {
+                git commit -m $Message | Out-Host
+            }
             Assert-LastExitCode "commit $Stage stage"
-            git push origin main | Out-Host
+            if ($Quiet) {
+                git push origin main | Out-Null
+            }
+            else {
+                git push origin main | Out-Host
+            }
             Assert-LastExitCode "push $Stage stage"
         }
         else {
@@ -361,6 +398,250 @@ function Get-PodName {
         throw "No Pod found for $Namespace/$Deployment."
     }
     return $pod
+}
+
+function Get-PresenterManifestRows {
+    param([string]$Path, [string]$Cluster)
+    $template = '{{.metadata.namespace}}{{"\t"}}{{.metadata.name}}{{"\t"}}{{(index .spec.template.spec.containers 0).image}}{{"\t"}}{{(index .spec.template.spec.containers 0).imagePullPolicy}}{{"\t"}}{{if .spec.template.spec.imagePullSecrets}}{{range .spec.template.spec.imagePullSecrets}}{{.name}}{{end}}{{else}}<none>{{end}}{{"\n"}}'
+    $rendered = @(kubectl create --dry-run=client -f (Join-Path $RepoRoot $Path) -o go-template="$template")
+    Assert-LastExitCode "render presenter manifest $Path"
+    foreach ($line in (($rendered -join "`n") -split "`r?`n")) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+        $parts = $line -split "`t"
+        [pscustomobject]@{
+            Cluster = $Cluster
+            Namespace = $parts[0]
+            Workload = $parts[1]
+            Image = $parts[2]
+            PullPolicy = $parts[3]
+            GitSecret = $parts[4]
+        }
+    }
+}
+
+function Show-PresenterManifestContract {
+    param([switch]$Negative)
+    $rows = if ($Negative) {
+        @(Get-PresenterManifestRows `
+            -Path "clusters/$($NegativeCluster.RepoPath)/negative-control/deployment.yaml" `
+            -Cluster $NegativeCluster.Name)
+    }
+    else {
+        @($Clusters | ForEach-Object {
+            Get-PresenterManifestRows `
+                -Path "clusters/$($_.RepoPath)/workloads/workloads.yaml" `
+                -Cluster $_.Name
+        })
+    }
+    foreach ($row in $rows) {
+        Write-Host "[$($row.Cluster)] $($row.Namespace)/$($row.Workload)" -ForegroundColor Cyan
+        Write-Host "  image:             $($row.Image)"
+        Write-Host "  imagePullPolicy:   $($row.PullPolicy)"
+        Write-Host "  imagePullSecrets:  $($row.GitSecret)" -ForegroundColor Yellow
+    }
+}
+
+function Get-SafeSecretMetadata {
+    param([string]$Context, [string]$Namespace)
+    $secret = kubectl --context $Context -n $Namespace get secret azure-arc-acr-pull -o json 2>$null | ConvertFrom-Json
+    if (-not $secret) {
+        return $null
+    }
+    [pscustomobject]@{
+        Namespace = $Namespace
+        UID = [string]$secret.metadata.uid
+        Type = [string]$secret.type
+        Created = [string]$secret.metadata.creationTimestamp
+        Expires = [string]$secret.metadata.annotations.'acr-auth.azure.com/expires-at'
+    }
+}
+
+function Get-TokenRefreshCount {
+    param([string]$Context)
+    $raw = kubectl --context $Context get --raw '/api/v1/namespaces/azure-arc-acr-auth/services/http:acr-auth-acr-auth-extension-secretprovisioner-metrics:metrics/proxy/metrics' 2>$null
+    $line = @($raw -split "`n" | Where-Object { $_ -match '^acr_auth_token_refresh_total\{result="success"\}' }) | Select-Object -First 1
+    if ($line -match ' ([0-9]+(?:\.[0-9]+)?)$') {
+        return [double]$Matches[1]
+    }
+    return 0
+}
+
+function Get-ComponentLogEntries {
+    param(
+        [string]$Context,
+        [ValidateSet('secret-provisioner', 'auth-injector')][string]$Component,
+        [datetime]$Since = [datetime]::MinValue,
+        [int]$Tail = 1200
+    )
+    $pods = kubectl --context $Context -n azure-arc-acr-auth get pods -l "app.kubernetes.io/component=$Component" -o jsonpath='{.items[*].metadata.name}'
+    foreach ($pod in ($pods -split ' ')) {
+        if ([string]::IsNullOrWhiteSpace($pod)) {
+            continue
+        }
+        $arguments = @('--context', $Context, '-n', 'azure-arc-acr-auth', 'logs', $pod, "--tail=$Tail")
+        if ($Since -ne [datetime]::MinValue) {
+            $arguments += "--since-time=$($Since.ToUniversalTime().ToString('o'))"
+        }
+        foreach ($line in @(kubectl @arguments 2>$null)) {
+            try {
+                $entry = $line | ConvertFrom-Json -ErrorAction Stop
+                [pscustomobject]@{
+                    Cluster = ($Clusters | Where-Object Context -eq $Context | Select-Object -First 1).Name
+                    Time = [string]$entry.AgentTimestamp
+                    Message = [string]$entry.Message
+                }
+            }
+            catch {
+                continue
+            }
+        }
+    }
+}
+
+function Show-LatestTokenRotationEvidence {
+    $entries = @(Get-ComponentLogEntries -Context $NegativeCluster.Context -Component secret-provisioner -Tail 1600)
+    $startIndex = -1
+    for ($index = 0; $index -lt $entries.Count; $index++) {
+        if ($entries[$index].Message -match 'gitops-vision-a.*reason=ExpiringSoon') {
+            $startIndex = $index
+        }
+    }
+    if ($startIndex -lt 0) {
+        Write-Host 'No rotation cycle remains in the current Pod log; using metrics and current expiry below.' -ForegroundColor DarkYellow
+        return
+    }
+    $window = @($entries[$startIndex..($entries.Count - 1)])
+    $evidence = @(
+        $window | Where-Object { $_.Message -match 'gitops-vision-a.*reason=ExpiringSoon' } | Select-Object -First 1
+        $window | Where-Object { $_.Message -match 'minted fresh ACR refresh token for acrvision' } | Select-Object -First 1
+        $window | Where-Object { $_.Message -match 'provisioned ACR pull secret in namespace "gitops-vision-a"' } | Select-Object -First 1
+    ) | Where-Object { $_ }
+    $evidence | ForEach-Object {
+        [pscustomobject]@{ Time = $_.Time; Evidence = $_.Message }
+    } | Format-Table -AutoSize -Wrap
+}
+
+function Invoke-PresenterSecretRecreation {
+    $context = $NegativeCluster.Context
+    $namespace = 'gitops-vision-a'
+    $before = Get-SafeSecretMetadata -Context $context -Namespace $namespace
+    $metricBefore = Get-TokenRefreshCount -Context $context
+    $started = (Get-Date).ToUniversalTime()
+
+    kubectl --context $context -n $namespace delete secret azure-arc-acr-pull | Out-Null
+    Assert-LastExitCode 'delete presenter pull Secret'
+    kubectl --context $context -n $namespace wait --for=create secret/azure-arc-acr-pull --timeout=120s | Out-Null
+    Assert-LastExitCode 'wait for presenter pull Secret recreation'
+    Wait-SecretReady -Context $context -Namespace $namespace
+    Wait-Until -TimeoutSeconds 30 -Description 'SecretProvisioner refresh metric' -PollSeconds 1 -Condition {
+        (Get-TokenRefreshCount -Context $context) -gt $metricBefore
+    }
+
+    $after = Get-SafeSecretMetadata -Context $context -Namespace $namespace
+    $metricAfter = Get-TokenRefreshCount -Context $context
+    @(
+        [pscustomobject]@{ State = 'Before'; UID = $before.UID; Type = $before.Type; Expires = $before.Expires }
+        [pscustomobject]@{ State = 'Recreated'; UID = $after.UID; Type = $after.Type; Expires = $after.Expires }
+    ) | Format-Table -AutoSize
+    [pscustomobject]@{
+        UIDChanged = ($before.UID -ne $after.UID)
+        RefreshMetric = "$metricBefore -> $metricAfter"
+        CredentialDataDisplayed = $false
+    } | Format-List
+
+    @(Get-ComponentLogEntries -Context $context -Component secret-provisioner -Since $started.AddSeconds(-5) -Tail 100) |
+        Where-Object { $_.Message -match 'gitops-vision-a' -and $_.Message -match 'SecretMissing|cached ACR|provisioned ACR' } |
+        Select-Object Time, Message | Format-Table -AutoSize -Wrap
+}
+
+function Show-PresenterPositiveProof {
+    $rows = foreach ($cluster in $Clusters) {
+        foreach ($workload in $cluster.Workloads) {
+            $pod = Get-PodName -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
+            $deploymentSecret = kubectl --context $cluster.Context -n $workload.Namespace get deployment $workload.Deployment -o jsonpath='{.spec.template.spec.imagePullSecrets[*].name}'
+            $podSecret = kubectl --context $cluster.Context -n $workload.Namespace get pod $pod -o jsonpath='{.spec.imagePullSecrets[*].name}'
+            $ready = kubectl --context $cluster.Context -n $workload.Namespace get pod $pod -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+            $pulled = @(kubectl --context $cluster.Context -n $workload.Namespace get events --field-selector "involvedObject.name=$pod,reason=Pulled" -o name 2>$null).Count
+            [pscustomobject]@{
+                Cluster = $cluster.Name
+                Workload = $workload.Deployment
+                GitSecret = if ($deploymentSecret) { $deploymentSecret } else { '<none>' }
+                PodSecret = if ($podSecret) { $podSecret } else { '<none>' }
+                Pulled = $pulled
+                Ready = $ready
+            }
+        }
+    }
+    $rows | Format-Table -AutoSize
+}
+
+function Show-PresenterAuthDecisions {
+    param([datetime]$Since, [string]$Pattern)
+    $rows = foreach ($cluster in $Clusters) {
+        Get-ComponentLogEntries -Context $cluster.Context -Component auth-injector -Since $Since.AddSeconds(-5) -Tail 300 |
+            Where-Object Message -Match $Pattern |
+            Select-Object -Last 4
+    }
+    @($rows) | Select-Object Cluster, Message -Unique | Format-Table -AutoSize -Wrap
+}
+
+function Show-PresenterMonitoring {
+    param([datetime]$Since)
+    $timestamp = $Since.ToUniversalTime().ToString('o')
+    $query = @"
+ResourceSyncNotifications_CL
+| where TimeGenerated >= datetime($timestamp)
+| where tolower(ClusterResourceId) == tolower('$ClusterArmIdA')
+| where OwnerName in ('acr-auth-gitops-demo-workloads', '$NegativeOwnerName')
+| extend F=todynamic(Fields)
+| summarize Latest=max(TimeGenerated), Objects=dcount(Uid),
+            PodPhases=make_set(tostring(F['status.phase'])),
+            Waiting=make_set(tostring(F['status.containerStatuses[*].state.waiting.reason']))
+  by OwnerName, Category
+| order by OwnerName asc, Category asc
+"@
+    $queryPath = Join-Path $env:TEMP "acr-auth-presenter-$PID-$([guid]::NewGuid().ToString('N')).kql"
+    try {
+        Set-Content -Path $queryPath -Value $query -Encoding utf8
+        $rows = @(az monitor log-analytics query --subscription $Subscription --workspace $WorkspaceId --analytics-query "@$queryPath" --timespan P1D -o json | ConvertFrom-Json)
+        if ($rows.Count -eq 0) {
+            Write-Host 'Monitoring rows are still ingesting; the Kubernetes proof remains immediate.' -ForegroundColor DarkYellow
+            return
+        }
+        $rows | ForEach-Object {
+            $application = if ($_.OwnerName -eq $NegativeOwnerName) { 'Unmapped control' } else { 'Mapped workloads' }
+            $detail = if (([string]$_.Waiting) -match 'ImagePullBackOff|ErrImagePull') {
+                'ImagePullBackOff'
+            }
+            elseif (([string]$_.PodPhases) -match 'Running') {
+                'Running'
+            }
+            elseif ($_.Category -eq 'Compliance') {
+                'Flux observed'
+            }
+            elseif ($_.Category -eq 'Lifecycle') {
+                'Membership tracked'
+            }
+            else {
+                '-'
+            }
+            [pscustomobject]@{
+                Application = $application
+                Signal = $_.Category
+                Objects = $_.Objects
+                Status = $detail
+                Latest = $_.Latest
+            }
+        } | Format-Table -AutoSize
+    }
+    catch {
+        Write-Host "Monitoring query is not presentation-blocking: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+    finally {
+        Remove-Item $queryPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Show-PositiveProof {
@@ -590,6 +871,125 @@ function Invoke-Negative {
     Write-DemoStep -Number 6 -Name 'GitOps monitor' -Detail 'Compare blocked runtime health with the healthy mapped workloads.'
 }
 
+function Invoke-PresenterDemo {
+    Invoke-LivePreflight
+    Assert-DemoBaseline
+    $demoStarted = (Get-Date).ToUniversalTime()
+
+    if (-not $NonInteractive) {
+        Clear-Host
+    }
+    Write-Host 'PRIVATE ACR SUPPORT + GITOPS MONITORING' -ForegroundColor Cyan
+    Write-Host 'Five-minute single-terminal demo' -ForegroundColor White
+
+    Write-PresenterCue `
+        -Time '0:00-0:35' `
+        -Title 'The credential-free contract' `
+        -Do 'Point to the manifest table below.' `
+        -Say @'
+This terminal is the entire demo. Behind the scenes, the script still pushes a real GitHub commit,
+and the registered Microsoft Flux extension reconciles it across two Arc-enabled clusters.
+These four Git-authored Deployments reference three private ACRs and use imagePullPolicy Always.
+The important column is GitSecret: there are no credentials and no imagePullSecrets in the manifests.
+'@
+    Show-PresenterManifestContract
+    Wait-PresenterAdvance
+
+    Write-PresenterCue `
+        -Time '0:35-1:25' `
+        -Title 'Token and Secret lifecycle' `
+        -Do 'Read the latest rotation evidence, then watch one Secret recreate live.' `
+        -Say @'
+SecretProvisioner maps each namespace to its approved registry. When a credential approaches expiry,
+it obtains the Arc cluster identity token, exchanges it for a short-lived ACR refresh token, and
+updates the namespace pull Secret. The first table shows the latest real rotation cycle.
+For a deterministic live proof, I delete one generated Secret while no workload is running.
+The controller detects SecretMissing and recreates it immediately. A new UID proves recreation;
+the same expiry is expected because the cached ACR token is still valid. No Secret data is displayed.
+'@
+    Write-Host "`nLATEST NATURAL ROTATION" -ForegroundColor Yellow
+    Show-LatestTokenRotationEvidence
+    Write-Host "`nLIVE SELF-HEALING / REPROVISIONING" -ForegroundColor Yellow
+    Invoke-PresenterSecretRecreation
+    Wait-PresenterAdvance
+
+    Write-PresenterCue `
+        -Time '1:25-2:40' `
+        -Title 'Microsoft Flux to private ACR' `
+        -Do 'The script now publishes the positive stage and waits for all four Pods.' `
+        -Say @'
+Now the script publishes the real Git state. Microsoft Flux applies the exact revision on both
+clusters. When each Pod is created, AuthInjector checks the namespace mapping and adds a reference
+to azure-arc-acr-pull. The Deployment remains credential-free; only the stored Pod is mutated.
+The kubelet then contacts the private registry, authenticates with the short-lived credential,
+pulls the image, and starts the workload. The proof below compares GitSecret with PodSecret and
+confirms both a real Pulled event and Ready status on every workload.
+'@
+    $positiveStarted = (Get-Date).ToUniversalTime()
+    $positiveSha = Publish-Stage -Stage positive -Message 'Demo: deploy private ACR workloads' -Quiet
+    foreach ($cluster in $Clusters) {
+        foreach ($workload in $cluster.Workloads) {
+            Wait-DeploymentReady -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
+        }
+    }
+    Write-Host "Microsoft Flux applied $($positiveSha.Substring(0, 7)) on both clusters." -ForegroundColor Green
+    Show-PresenterPositiveProof
+    Write-Host "`nAUTHINJECTOR DECISIONS" -ForegroundColor Yellow
+    Show-PresenterAuthDecisions -Since $positiveStarted -Pattern 'injected azure-arc-acr-pull'
+    Write-Host "`nSECRET LIFECYCLE METRICS" -ForegroundColor Yellow
+    Get-ProvisionerMetrics | ForEach-Object { Write-Host $_ }
+    Wait-PresenterAdvance
+
+    Write-PresenterCue `
+        -Time '2:40-3:15' `
+        -Title 'GitOps Monitoring' `
+        -Do 'Point to the mapped workload signals below.' `
+        -Say @'
+GitOps Monitoring independently discovers the Flux application and publishes a ResourceSyncSettings
+watch contract. The Resource Sync Operator follows the Deployment, ReplicaSet, and Pod ownership
+chain and exports compliance, health, and lifecycle records to Log Analytics. This gives the portal
+an application-level view rather than a flat list of Kubernetes objects.
+'@
+    Show-PresenterMonitoring -Since $demoStarted
+    Wait-PresenterAdvance
+
+    Write-PresenterCue `
+        -Time '3:15-4:20' `
+        -Title 'Unmapped negative control' `
+        -Do 'Point out that this is the same known-good private image.' `
+        -Say @'
+The negative control uses the same Vision image, imagePullPolicy, GitHub source, Microsoft Flux
+pipeline, and cluster. The only difference is its namespace, which is deliberately absent from
+acrMap. SecretProvisioner creates no Secret, AuthInjector reports namespace-not-mapped, and the Pod
+receives no imagePullSecret. The private registry therefore rejects the unauthenticated request and
+Kubernetes reports ImagePullBackOff, while the four mapped workloads remain healthy.
+'@
+    Show-PresenterManifestContract -Negative
+    $negativeStarted = (Get-Date).ToUniversalTime()
+    $negativeSha = Publish-Stage -Stage negative -Message 'Demo: add unmapped ACR negative control' -Quiet
+    $negativePod = Wait-NegativePod
+    Write-Host "Negative control applied at $($negativeSha.Substring(0, 7))." -ForegroundColor Green
+    Show-NegativeProof -Pod $negativePod
+    Write-Host "`nAUTHINJECTOR DECISION" -ForegroundColor Yellow
+    Show-PresenterAuthDecisions -Since $negativeStarted -Pattern "namespace-not-mapped|$NegativeNamespace"
+    Wait-PresenterAdvance
+
+    Write-PresenterCue `
+        -Time '4:20-5:00' `
+        -Title 'Compare and close' `
+        -Do 'Compare mapped workloads with the unmapped control, then finish.' `
+        -Say @'
+The monitoring view now correlates both outcomes. The mapped application has running workloads and
+tracked resource relationships. The isolated control shows a pending Pod with ImagePullBackOff.
+The same GitOps pipeline produced both results; the namespace-to-ACR authorization contract is the
+only intentional difference. Private ACR Support handles credential lifecycle and admission, while
+GitOps Monitoring explains the resulting application health without exposing a credential.
+'@
+    Show-PresenterMonitoring -Since $demoStarted
+    Write-Host "`nDEMO COMPLETE" -ForegroundColor Green
+    Write-Host 'After the presentation: .\demo\Invoke-LiveDemo.ps1 -Action Cleanup' -ForegroundColor Cyan
+}
+
 function Show-Status {
     Write-Section 'Git and Flux status'
     Push-Location $RepoRoot
@@ -677,6 +1077,7 @@ switch ($Action) {
         Write-Host "`nDemo complete. Refresh the frontend and compare the healthy workload application with $NegativeOwnerName." -ForegroundColor Green
         Show-MonitoringQuery -Since $demoStarted
     }
+    'Presenter' { Invoke-PresenterDemo }
     'RunFleet' {
         Invoke-LivePreflight
         Assert-DemoBaseline

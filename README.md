@@ -71,9 +71,10 @@ The repeatable presenter automation and talk track are in:
 - [`demo/Invoke-LiveDemo.ps1`](demo/Invoke-LiveDemo.ps1)
 - [`demo/FIVE-MINUTE-RUNBOOK.md`](demo/FIVE-MINUTE-RUNBOOK.md)
 
-Run `Initialize` once, `Prepare` before the meeting, `Run` on stage, and `Cleanup` afterward. The
-positive phase fans one Git commit across both clusters. The negative phase uses the same private
-image in an intentionally unmapped namespace and waits for `ImagePullBackOff`.
+Run `Initialize` once, `Prepare` before the meeting, `Presenter` on stage, and `Cleanup` afterward.
+`Presenter` is a single-terminal experience: it prints the timed talk track, renders compact manifest
+proof, shows token rotation and Secret recreation, deploys through Microsoft Flux, and compares the
+GitOps monitoring outcomes. The older `Run` action remains available for a multi-window presentation.
 
 For a longer scale-focused presentation, use `RunFleet`. It deploys the core four workloads, expands
 to twelve, then retains all twelve healthy workloads while the isolated negative control fails:

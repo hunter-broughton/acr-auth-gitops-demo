@@ -39,13 +39,37 @@ is not in either `acrMap`.
 The complete noninteractive rehearsal was measured at **167.2 seconds**, leaving roughly two minutes
 inside a five-minute slot for narration, GitHub, and frontend refreshes.
 
+For the recommended presentation, open one large PowerShell terminal in the repository root. The
+script prints every `DO` and `SAY` cue, so GitHub and the monitoring frontend do not need to be open.
+
+## Recommended single-terminal presentation
+
+```powershell
+.\demo\Invoke-LiveDemo.ps1 -Action Presenter
+```
+
+The terminal pauses between six timed sections. Press Enter after you finish each displayed script.
+It shows:
+
+- Git-authored image, `imagePullPolicy`, and missing `imagePullSecrets` fields.
+- The latest real `ExpiringSoon -> minted token -> provisioned Secret` rotation cycle.
+- A deterministic live Secret deletion/recreation using safe metadata only.
+- Exact Microsoft Flux revision, admission injection, ACR pull, and Pod readiness.
+- The unmapped negative control and `ImagePullBackOff`.
+- A compact Log Analytics comparison from GitOps Monitoring.
+
+No Secret `.data` is read or displayed. The recreation step runs while no demo workload exists and
+waits for the extension-owned Secret to be healthy before deploying.
+
+## Optional multi-window presentation
+
 Open these before sharing the screen:
 
 1. GitHub: <https://github.com/hunter-broughton/acr-auth-gitops-demo/commits/main>
 2. The monitoring frontend filtered to `acr-auth-gitops-demo`.
 3. One large PowerShell terminal in the repository root.
 
-## Run the presentation
+### Run the multi-window presentation
 
 ```powershell
 .\demo\Invoke-LiveDemo.ps1 -Action Run
@@ -185,6 +209,9 @@ configurations, namespaces, or the generated positive pull Secrets.
 ```powershell
 # Read-only current status
 .\demo\Invoke-LiveDemo.ps1 -Action Status
+
+# Rehearse the single-terminal presenter flow without pauses
+.\demo\Invoke-LiveDemo.ps1 -Action Presenter -NonInteractive
 
 # Run without the narration pause (rehearsal/CI)
 .\demo\Invoke-LiveDemo.ps1 -Action Run -NonInteractive
