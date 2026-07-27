@@ -207,14 +207,14 @@ function Publish-Stage {
         $staged = @(git diff --cached --name-only)
         if ($staged.Count -gt 0) {
             if ($Quiet) {
-                git commit -m $Message | Out-Null
+                git commit -m $Message 2>&1 | Out-Null
             }
             else {
                 git commit -m $Message | Out-Host
             }
             Assert-LastExitCode "commit $Stage stage"
             if ($Quiet) {
-                git push origin main | Out-Null
+                git push origin main 2>&1 | Out-Null
             }
             else {
                 git push origin main | Out-Host
@@ -542,11 +542,12 @@ function Invoke-PresenterSecretRecreation {
     $after = Get-SafeSecretMetadata -Context $context -Namespace $namespace
     $metricAfter = Get-TokenRefreshCount -Context $context
     @(
-        [pscustomobject]@{ State = 'Before'; UID = $before.UID; Type = $before.Type; Expires = $before.Expires }
-        [pscustomobject]@{ State = 'Recreated'; UID = $after.UID; Type = $after.Type; Expires = $after.Expires }
+        [pscustomobject]@{ State = 'Before'; UID = $before.UID; Type = $before.Type }
+        [pscustomobject]@{ State = 'Recreated'; UID = $after.UID; Type = $after.Type }
     ) | Format-Table -AutoSize
     [pscustomobject]@{
         UIDChanged = ($before.UID -ne $after.UID)
+        CredentialExpires = $after.Expires
         RefreshMetric = "$metricBefore -> $metricAfter"
         CredentialDataDisplayed = $false
     } | Format-List
@@ -574,7 +575,12 @@ function Show-PresenterPositiveProof {
             }
         }
     }
-    $rows | Format-Table -AutoSize
+    foreach ($row in $rows) {
+        Write-Host "[$($row.Cluster)] $($row.Workload)" -ForegroundColor Cyan
+        Write-Host "  Git template Secret:  $($row.GitSecret)"
+        Write-Host "  Stored Pod Secret:    $($row.PodSecret)"
+        Write-Host "  Pulled event / Ready: $($row.Pulled) / $($row.Ready)" -ForegroundColor Green
+    }
 }
 
 function Show-PresenterAuthDecisions {
@@ -638,6 +644,32 @@ ResourceSyncNotifications_CL
     }
     catch {
         Write-Host "Monitoring query is not presentation-blocking: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+    finally {
+        Remove-Item $queryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-PresenterNegativeHealthReady {
+    param([datetime]$Since)
+    $timestamp = $Since.ToUniversalTime().ToString('o')
+    $query = @"
+ResourceSyncNotifications_CL
+| where TimeGenerated >= datetime($timestamp)
+| where tolower(ClusterResourceId) == tolower('$ClusterArmIdA')
+| where OwnerName == '$NegativeOwnerName' and Category == 'Health'
+| extend F=todynamic(Fields)
+| where tostring(F['status.containerStatuses[*].state.waiting.reason']) has_any ('ErrImagePull', 'ImagePullBackOff')
+| count
+"@
+    $queryPath = Join-Path $env:TEMP "acr-auth-presenter-ready-$PID-$([guid]::NewGuid().ToString('N')).kql"
+    try {
+        Set-Content -Path $queryPath -Value $query -Encoding utf8
+        $count = az monitor log-analytics query --subscription $Subscription --workspace $WorkspaceId --analytics-query "@$queryPath" --timespan P1D --query '[0].Count' -o tsv 2>$null
+        return ([int]$count -gt 0)
+    }
+    catch {
+        return $false
     }
     finally {
         Remove-Item $queryPath -Force -ErrorAction SilentlyContinue
@@ -985,6 +1017,15 @@ The same GitOps pipeline produced both results; the namespace-to-ACR authorizati
 only intentional difference. Private ACR Support handles credential lifecycle and admission, while
 GitOps Monitoring explains the resulting application health without exposing a credential.
 '@
+    Write-Host 'Waiting briefly for the new negative Health row to reach Log Analytics...' -ForegroundColor DarkGray
+    try {
+        Wait-Until -TimeoutSeconds 50 -Description 'negative GitOps Monitoring Health row' -PollSeconds 5 -Condition {
+            Test-PresenterNegativeHealthReady -Since $negativeStarted
+        }
+    }
+    catch {
+        Write-Host 'The Health row is still ingesting; the immediate Kubernetes proof above remains authoritative.' -ForegroundColor DarkYellow
+    }
     Show-PresenterMonitoring -Since $demoStarted
     Write-Host "`nDEMO COMPLETE" -ForegroundColor Green
     Write-Host 'After the presentation: .\demo\Invoke-LiveDemo.ps1 -Action Cleanup' -ForegroundColor Cyan
