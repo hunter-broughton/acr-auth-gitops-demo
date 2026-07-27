@@ -316,13 +316,10 @@ function Assert-LiveTopology {
         '--cluster-type', 'connectedClusters',
         '--name', $AcrExtensionName
     )
-    $mappedSetting = $extension.configurationSettings.PSObject.Properties["acrMap.$($Mapped.namespace)"]
-    $unmappedSetting = $extension.configurationSettings.PSObject.Properties["acrMap.$($Unmapped.namespace)"]
-    if (-not $mappedSetting -or $mappedSetting.Value -ne $Mapped.registry) {
-        throw "ACR Auth must map $($Mapped.namespace) to $($Mapped.registry)."
-    }
-    if ($unmappedSetting) {
-        throw "$($Unmapped.namespace) must remain absent from acrMap."
+    $settings = @($extension.configurationSettings.PSObject.Properties)
+    $expectedSettingName = "acrMap.$($Mapped.namespace)"
+    if ($settings.Count -ne 1 -or $settings[0].Name -ne $expectedSettingName -or $settings[0].Value -ne $Mapped.registry) {
+        throw "ACR Auth must contain only $expectedSettingName=$($Mapped.registry)."
     }
 
     Write-Good "One cluster: $($Cluster.name)."
@@ -349,21 +346,21 @@ function Initialize-Demo {
     Show-AcrAuthInstallCommand
 
     $extensionArgs = @(
-        'k8s-extension', 'update',
+        'k8s-extension', 'create',
         '--subscription', $Subscription,
         '--resource-group', $Cluster.resourceGroup,
         '--cluster-name', $Cluster.name,
         '--cluster-type', 'connectedClusters',
         '--name', $AcrExtensionName,
+        '--extension-type', $AcrExtensionType,
         '--release-train', $AcrReleaseTrain,
         '--version', $AcrExtensionVersion,
         '--auto-upgrade-minor-version', 'false',
         '--configuration-settings', "acrMap.$($Mapped.namespace)=$($Mapped.registry)",
-        '--yes',
         '--output', 'none'
     )
     & az @extensionArgs
-    Assert-LastExitCode -Operation 'Narrow the Private ACR namespace map'
+    Assert-LastExitCode -Operation 'Apply the exact Private ACR namespace map'
 
     Write-Banner -Number 2 -Title 'One Microsoft Flux source with two Kustomizations'
     Remove-FluxConfiguration -ResourceGroup $Cluster.resourceGroup -ClusterName $Cluster.name -Name 'acr-auth-negative-control'
