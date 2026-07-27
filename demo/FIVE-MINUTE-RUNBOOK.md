@@ -36,20 +36,23 @@ demo Deployments and Pods through Flux pruning, preserves the four namespaces, w
 extension-owned pull Secrets, clears demo namespace Events, and verifies that the negative namespace
 is not in either `acrMap`.
 
-The complete noninteractive rehearsal was measured at **167.2 seconds**, leaving roughly two minutes
-inside a five-minute slot for narration, GitHub, and frontend refreshes.
+The Presenter automation completes in about **100 seconds without narration**. The six displayed
+story modules and Enter-controlled stops are paced for a five-minute presentation.
 
-For the recommended presentation, open one large PowerShell terminal in the repository root. The
-script prints every `DO` and `SAY` cue, so GitHub and the monitoring frontend do not need to be open.
+For the recommended presentation, place the GitOps Monitoring blade on one side of the screen and a
+large PowerShell terminal on the other. Filter the blade to `hbroughton-acr-test-kind`. The terminal
+contains the story, actions, and private ACR evidence; the blade shows the resource graph and health
+changes. GitHub remains the real Flux source but does not need to be open.
 
-## Recommended single-terminal presentation
+## Recommended side-by-side presentation
 
 ```powershell
 .\demo\Invoke-LiveDemo.ps1 -Action Presenter
 ```
 
-The terminal pauses between six timed sections. Press Enter after you finish each displayed script.
-It shows:
+The terminal uses the same concise `STEP`, `[OK]`, `[X]`, and note style as the original Private ACR
+demo. It pauses between six timed modules; refresh the monitoring blade at the two prompts, then press
+Enter. The combined view shows:
 
 - Git-authored image, `imagePullPolicy`, and missing `imagePullSecrets` fields.
 - The latest real `ExpiringSoon -> minted token -> provisioned Secret` rotation cycle.
@@ -57,6 +60,9 @@ It shows:
 - Exact Microsoft Flux revision, admission injection, ACR pull, and Pod readiness.
 - The unmapped negative control and `ImagePullBackOff`.
 - A compact Log Analytics comparison from GitOps Monitoring.
+
+The former `frontend-demo-source` and `missing-app-artifact` fixtures were removed so the selected
+cluster contains only the mapped workload application and isolated negative control for this demo.
 
 No Secret `.data` is read or displayed. The recreation step runs while no demo workload exists and
 waits for the extension-owned Secret to be healthy before deploying.

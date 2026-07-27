@@ -72,9 +72,11 @@ The repeatable presenter automation and talk track are in:
 - [`demo/FIVE-MINUTE-RUNBOOK.md`](demo/FIVE-MINUTE-RUNBOOK.md)
 
 Run `Initialize` once, `Prepare` before the meeting, `Presenter` on stage, and `Cleanup` afterward.
-`Presenter` is a single-terminal experience: it prints the timed talk track, renders compact manifest
-proof, shows token rotation and Secret recreation, deploys through Microsoft Flux, and compares the
-GitOps monitoring outcomes. The older `Run` action remains available for a multi-window presentation.
+`Presenter` is a side-by-side terminal and GitOps Monitoring experience. The terminal uses six
+concise AI model-training story modules, renders manifest proof, shows token rotation and Secret
+recreation, and deploys through Microsoft Flux. The monitoring blade remains visible for resource
+topology and health. GitHub stays the real source but does not need to be open. The older `Run` action
+remains available for the original multi-window presentation.
 
 For a longer scale-focused presentation, use `RunFleet`. It deploys the core four workloads, expands
 to twelve, then retains all twelve healthy workloads while the isolated negative control fails:

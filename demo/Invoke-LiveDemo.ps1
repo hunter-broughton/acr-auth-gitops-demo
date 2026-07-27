@@ -39,28 +39,49 @@ function Write-DemoStep {
     Write-Host ("[{0}/6] {1,-18} {2}" -f $Number, $Name, $Detail) -ForegroundColor Yellow
 }
 
-function Write-PresenterCue {
-    param(
-        [string]$Time,
-        [string]$Title,
-        [string]$Say,
-        [string]$Do = ''
-    )
-    Write-Host "`n================================================================" -ForegroundColor DarkCyan
-    Write-Host "[$Time] $Title" -ForegroundColor Cyan
-    if ($Do) {
-        Write-Host "DO:  $Do" -ForegroundColor Yellow
+function Write-PresenterBanner {
+    param([string]$Number, [string]$Time, [string]$Title)
+    $line = '=' * 78
+    Write-Host "`n  $line" -ForegroundColor DarkCyan
+    Write-Host "   STEP $Number   [$Time]   $Title" -ForegroundColor Cyan
+    Write-Host "  $line`n" -ForegroundColor DarkCyan
+}
+
+function Write-PresenterStep {
+    param([string]$Message)
+    Write-Host "   > $Message" -ForegroundColor White
+}
+
+function Write-PresenterGood {
+    param([string]$Message)
+    Write-Host "   [OK]  $Message" -ForegroundColor Green
+}
+
+function Write-PresenterBad {
+    param([string]$Message)
+    Write-Host "   [X]   $Message" -ForegroundColor Red
+}
+
+function Write-PresenterNote {
+    param([string]$Message)
+    Write-Host "         $Message" -ForegroundColor DarkGray
+}
+
+function Write-PresenterStory {
+    param([string]$Text)
+    Write-Host ''
+    foreach ($line in ($Text -split "`n")) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            Write-Host "   $line" -ForegroundColor White
+        }
     }
-    Write-Host 'SAY:' -ForegroundColor Green
-    foreach ($line in ($Say -split "`n")) {
-        Write-Host "  $line" -ForegroundColor White
-    }
-    Write-Host "================================================================" -ForegroundColor DarkCyan
+    Write-Host ''
 }
 
 function Wait-PresenterAdvance {
-    param([string]$Prompt = 'Press Enter for the next section')
+    param([string]$Prompt = '        - - - - -  press Enter to continue  - - - - -')
     if (-not $NonInteractive) {
+        Write-Host ''
         [void](Read-Host $Prompt)
     }
 }
@@ -903,132 +924,133 @@ function Invoke-Negative {
     Write-DemoStep -Number 6 -Name 'GitOps monitor' -Detail 'Compare blocked runtime health with the healthy mapped workloads.'
 }
 
-function Invoke-PresenterDemo {
-    Invoke-LivePreflight
-    Assert-DemoBaseline
-    $demoStarted = (Get-Date).ToUniversalTime()
-
-    if (-not $NonInteractive) {
-        Clear-Host
-    }
-    Write-Host 'PRIVATE ACR SUPPORT + GITOPS MONITORING' -ForegroundColor Cyan
-    Write-Host 'Five-minute single-terminal demo' -ForegroundColor White
-
-    Write-PresenterCue `
-        -Time '0:00-0:35' `
-        -Title 'The credential-free contract' `
-        -Do 'Point to the manifest table below.' `
-        -Say @'
-This terminal is the entire demo. Behind the scenes, the script still pushes a real GitHub commit,
-and the registered Microsoft Flux extension reconciles it across two Arc-enabled clusters.
-These four Git-authored Deployments reference three private ACRs and use imagePullPolicy Always.
-The important column is GitSecret: there are no credentials and no imagePullSecrets in the manifests.
+function Show-PresenterTeamContract {
+    Write-PresenterBanner -Number '1' -Time '0:00-0:40' -Title 'Three AI teams, one credential-free contract'
+    Write-PresenterStory @'
+The Computer Vision, Speech, and NLP teams each train models from a private Azure Container Registry.
+Their four Deployments live in a real GitHub repository and Microsoft Flux reconciles them across
+two Arc-enabled clusters. The manifests contain private images and imagePullPolicy Always, but no
+credentials and no imagePullSecrets.
 '@
     Show-PresenterManifestContract
+    Write-PresenterGood 'Four Git-authored workloads; zero credential references.'
+    Write-PresenterNote 'Keep the GitOps Monitoring blade visible beside this terminal.'
     Wait-PresenterAdvance
+}
 
-    Write-PresenterCue `
-        -Time '0:35-1:25' `
-        -Title 'Token and Secret lifecycle' `
-        -Do 'Read the latest rotation evidence, then watch one Secret recreate live.' `
-        -Say @'
-SecretProvisioner maps each namespace to its approved registry. When a credential approaches expiry,
-it obtains the Arc cluster identity token, exchanges it for a short-lived ACR refresh token, and
-updates the namespace pull Secret. The first table shows the latest real rotation cycle.
-For a deterministic live proof, I delete one generated Secret while no workload is running.
-The controller detects SecretMissing and recreates it immediately. A new UID proves recreation;
-the same expiry is expected because the cached ACR token is still valid. No Secret data is displayed.
+function Invoke-PresenterCredentialStage {
+    Write-PresenterBanner -Number '2' -Time '0:40-1:35' -Title 'SecretProvisioner manages short-lived credentials'
+    Write-PresenterStep 'Each mapped namespace resolves to its approved private registry.'
+    Write-PresenterStory @'
+SecretProvisioner uses the Arc cluster identity, exchanges it for a registry-scoped ACR token, and
+maintains one pull Secret per mapped namespace. The latest real rotation below shows expiry
+detection, token minting, and Secret provisioning.
 '@
-    Write-Host "`nLATEST NATURAL ROTATION" -ForegroundColor Yellow
     Show-LatestTokenRotationEvidence
-    Write-Host "`nLIVE SELF-HEALING / REPROVISIONING" -ForegroundColor Yellow
+    Write-PresenterStep 'Deleting one generated Secret to demonstrate live self-healing.'
     Invoke-PresenterSecretRecreation
+    Write-PresenterGood 'The extension recreated the Secret without exposing credential data.'
     Wait-PresenterAdvance
+}
 
-    Write-PresenterCue `
-        -Time '1:25-2:40' `
-        -Title 'Microsoft Flux to private ACR' `
-        -Do 'The script now publishes the positive stage and waits for all four Pods.' `
-        -Say @'
-Now the script publishes the real Git state. Microsoft Flux applies the exact revision on both
-clusters. When each Pod is created, AuthInjector checks the namespace mapping and adds a reference
-to azure-arc-acr-pull. The Deployment remains credential-free; only the stored Pod is mutated.
-The kubelet then contacts the private registry, authenticates with the short-lived credential,
-pulls the image, and starts the workload. The proof below compares GitSecret with PodSecret and
-confirms both a real Pulled event and Ready status on every workload.
+function Invoke-PresenterMappedStage {
+    Write-PresenterBanner -Number '3' -Time '1:35-2:50' -Title 'Microsoft Flux deploys the model trainers'
+    Write-PresenterStory @'
+The script now publishes the real Git state. Microsoft Flux applies the exact revision on both
+clusters. AuthInjector intercepts each Pod creation request and adds the namespace pull Secret.
+The kubelet then authenticates to ACR, pulls the image, and starts the training workload.
 '@
-    $positiveStarted = (Get-Date).ToUniversalTime()
-    $positiveSha = Publish-Stage -Stage positive -Message 'Demo: deploy private ACR workloads' -Quiet
+    $started = (Get-Date).ToUniversalTime()
+    $sha = Publish-Stage -Stage positive -Message 'Demo: deploy private ACR workloads' -Quiet
     foreach ($cluster in $Clusters) {
         foreach ($workload in $cluster.Workloads) {
             Wait-DeploymentReady -Context $cluster.Context -Namespace $workload.Namespace -Deployment $workload.Deployment
         }
     }
-    Write-Host "Microsoft Flux applied $($positiveSha.Substring(0, 7)) on both clusters." -ForegroundColor Green
+    Write-PresenterGood "Microsoft Flux applied $($sha.Substring(0, 7)) on both clusters."
     Show-PresenterPositiveProof
-    Write-Host "`nAUTHINJECTOR DECISIONS" -ForegroundColor Yellow
-    Show-PresenterAuthDecisions -Since $positiveStarted -Pattern 'injected azure-arc-acr-pull'
-    Write-Host "`nSECRET LIFECYCLE METRICS" -ForegroundColor Yellow
-    Get-ProvisionerMetrics | ForEach-Object { Write-Host $_ }
-    Wait-PresenterAdvance
+    Write-PresenterStep 'AuthInjector decisions:'
+    Show-PresenterAuthDecisions -Since $started -Pattern 'injected azure-arc-acr-pull'
+    Write-PresenterGood 'All mapped workloads pulled privately and reached Ready.'
+    Write-PresenterNote 'Refresh the GitOps Monitoring blade; expand acr-auth-gitops-demo-workloads.'
+    Wait-PresenterAdvance '        refresh the monitoring view, then press Enter'
+}
 
-    Write-PresenterCue `
-        -Time '2:40-3:15' `
-        -Title 'GitOps Monitoring' `
-        -Do 'Point to the mapped workload signals below.' `
-        -Say @'
-GitOps Monitoring independently discovers the Flux application and publishes a ResourceSyncSettings
-watch contract. The Resource Sync Operator follows the Deployment, ReplicaSet, and Pod ownership
-chain and exports compliance, health, and lifecycle records to Log Analytics. This gives the portal
-an application-level view rather than a flat list of Kubernetes objects.
+function Show-PresenterMonitoringStage {
+    param([datetime]$DemoStarted)
+    Write-PresenterBanner -Number '4' -Time '2:50-3:25' -Title 'GitOps Monitoring maps applications to runtime health'
+    Write-PresenterStory @'
+The Inventory Operator discovers the Flux owner and publishes a ResourceSyncSettings watch contract.
+Resource Sync follows the Deployment, ReplicaSet, and Pod ownership chain, then exports compliance,
+health, and lifecycle data. The portal shows the application graph rather than a flat object list.
 '@
-    Show-PresenterMonitoring -Since $demoStarted
+    Show-PresenterMonitoring -Since $DemoStarted
+    Write-PresenterGood 'Mapped model-training workloads are healthy and their relationships are tracked.'
     Wait-PresenterAdvance
+}
 
-    Write-PresenterCue `
-        -Time '3:15-4:20' `
-        -Title 'Unmapped negative control' `
-        -Do 'Point out that this is the same known-good private image.' `
-        -Say @'
-The negative control uses the same Vision image, imagePullPolicy, GitHub source, Microsoft Flux
-pipeline, and cluster. The only difference is its namespace, which is deliberately absent from
-acrMap. SecretProvisioner creates no Secret, AuthInjector reports namespace-not-mapped, and the Pod
-receives no imagePullSecret. The private registry therefore rejects the unauthenticated request and
-Kubernetes reports ImagePullBackOff, while the four mapped workloads remain healthy.
+function Invoke-PresenterNegativeStage {
+    param([ref]$NegativeStarted)
+    Write-PresenterBanner -Number '5' -Time '3:25-4:25' -Title 'The unmapped AI team is denied'
+    Write-PresenterStory @'
+A fourth experimental team uses the same known-good Vision image and the same Microsoft Flux path.
+Its namespace is deliberately absent from acrMap. SecretProvisioner skips it, AuthInjector does not
+mutate the Pod, and the private registry rejects the unauthenticated pull.
 '@
     Show-PresenterManifestContract -Negative
-    $negativeStarted = (Get-Date).ToUniversalTime()
-    $negativeSha = Publish-Stage -Stage negative -Message 'Demo: add unmapped ACR negative control' -Quiet
-    $negativePod = Wait-NegativePod
-    Write-Host "Negative control applied at $($negativeSha.Substring(0, 7))." -ForegroundColor Green
-    Show-NegativeProof -Pod $negativePod
-    Write-Host "`nAUTHINJECTOR DECISION" -ForegroundColor Yellow
-    Show-PresenterAuthDecisions -Since $negativeStarted -Pattern "namespace-not-mapped|$NegativeNamespace"
-    Wait-PresenterAdvance
+    $started = (Get-Date).ToUniversalTime()
+    $NegativeStarted.Value = $started
+    $sha = Publish-Stage -Stage negative -Message 'Demo: add unmapped ACR negative control' -Quiet
+    $pod = Wait-NegativePod
+    Write-PresenterGood "Microsoft Flux applied the control at $($sha.Substring(0, 7))."
+    Show-NegativeProof -Pod $pod
+    Show-PresenterAuthDecisions -Since $started -Pattern "namespace-not-mapped|$NegativeNamespace"
+    Write-PresenterBad 'No mapping, no Secret, and the Pod reaches ImagePullBackOff.'
+    Write-PresenterNote 'Refresh the monitoring blade; compare the healthy app with the negative control.'
+    Wait-PresenterAdvance '        refresh the monitoring view, then press Enter'
+}
 
-    Write-PresenterCue `
-        -Time '4:20-5:00' `
-        -Title 'Compare and close' `
-        -Do 'Compare mapped workloads with the unmapped control, then finish.' `
-        -Say @'
-The monitoring view now correlates both outcomes. The mapped application has running workloads and
-tracked resource relationships. The isolated control shows a pending Pod with ImagePullBackOff.
-The same GitOps pipeline produced both results; the namespace-to-ACR authorization contract is the
-only intentional difference. Private ACR Support handles credential lifecycle and admission, while
-GitOps Monitoring explains the resulting application health without exposing a credential.
-'@
-    Write-Host 'Waiting briefly for the new negative Health row to reach Log Analytics...' -ForegroundColor DarkGray
+function Show-PresenterClosingStage {
+    param([datetime]$DemoStarted, [datetime]$NegativeStarted)
+    Write-PresenterBanner -Number '6' -Time '4:25-5:00' -Title 'One GitOps pipeline, two explained outcomes'
     try {
         Wait-Until -TimeoutSeconds 50 -Description 'negative GitOps Monitoring Health row' -PollSeconds 5 -Condition {
-            Test-PresenterNegativeHealthReady -Since $negativeStarted
+            Test-PresenterNegativeHealthReady -Since $NegativeStarted
         }
     }
     catch {
-        Write-Host 'The Health row is still ingesting; the immediate Kubernetes proof above remains authoritative.' -ForegroundColor DarkYellow
+        Write-PresenterNote 'The new Health row is still ingesting; Kubernetes already provides the immediate proof.'
     }
-    Show-PresenterMonitoring -Since $demoStarted
-    Write-Host "`nDEMO COMPLETE" -ForegroundColor Green
-    Write-Host 'After the presentation: .\demo\Invoke-LiveDemo.ps1 -Action Cleanup' -ForegroundColor Cyan
+    Show-PresenterMonitoring -Since $DemoStarted
+    Write-PresenterStory @'
+The mapped AI teams are running with automatically provisioned credentials. The unmapped control is
+blocked with ImagePullBackOff. Private ACR Support handles token and Secret lifecycle plus admission;
+GitOps Monitoring explains the resulting application health and topology without exposing a secret.
+'@
+    Write-PresenterGood 'Demo complete.'
+    Write-PresenterNote 'After the presentation: .\demo\Invoke-LiveDemo.ps1 -Action Cleanup'
+}
+
+function Invoke-PresenterDemo {
+    Invoke-LivePreflight
+    Assert-DemoBaseline
+    $demoStarted = (Get-Date).ToUniversalTime()
+    if (-not $NonInteractive) {
+        Clear-Host
+    }
+    Write-Host ''
+    Write-Host '   #####################################################################' -ForegroundColor Magenta
+    Write-Host '   #  PRIVATE ACR SUPPORT + GITOPS MONITORING  |  AI model training   #' -ForegroundColor Magenta
+    Write-Host '   #####################################################################' -ForegroundColor Magenta
+    Write-PresenterNote 'Display: GitOps Monitoring blade on one side, this terminal on the other.'
+
+    Show-PresenterTeamContract
+    Invoke-PresenterCredentialStage
+    Invoke-PresenterMappedStage
+    Show-PresenterMonitoringStage -DemoStarted $demoStarted
+    $negativeStarted = [datetime]::MinValue
+    Invoke-PresenterNegativeStage -NegativeStarted ([ref]$negativeStarted)
+    Show-PresenterClosingStage -DemoStarted $demoStarted -NegativeStarted $negativeStarted
 }
 
 function Show-Status {
